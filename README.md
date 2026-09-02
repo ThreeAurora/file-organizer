@@ -1,5 +1,7 @@
 # 文件归档器
 
+[English](./README.en-US.md) | 中文
+
 Windows 桌面文件归档工具：把文件拖到窗口分区上，按规则（年/月、ctime/mtime 时间模式、复制/移动）自动归档到目标目录。附带 Everything 搜索联动、分区配色与重命名、窗口状态记忆、高 DPI 适配等。
 
 - 技术栈：Python + tkinter + tkinterdnd2（拖拽），ctypes 直调 Win32 API（标题栏激活态、DragAcceptFiles）
