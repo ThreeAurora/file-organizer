@@ -1,4 +1,4 @@
+# 防丢模式: dist 发布产物已入库(2026-09-02); build/ 为 PyInstaller 中间物仍排除
 __pycache__/
 build/
-dist/
 *.pyc
