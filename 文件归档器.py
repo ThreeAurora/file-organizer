@@ -1040,12 +1040,89 @@ def pick_zone_color(cfg_dict, lbl_widget):
         save_all()
 
 
+def _ask_string_dialog(title, prompt, initial=""):
+    """自建输入对话框 —— 替代 tkinter.simpledialog.askstring。
+
+    为什么不用现成的 askstring：它创建的窗口既没有 transient(root) 也没有
+    topmost，而主窗口默认开了「置顶窗口」，结果就是主窗口浮在最上层、
+    这个输入框被压在下面，用户根本看不见（只能去任务栏捞）。
+
+    这里补齐三件事：
+      1. transient(root)  —— 声明它是主窗口的附属窗口，永远压在主子之上；
+      2. attributes('-topmost', True) —— 与主窗口同属置顶层，
+         并抬高一级，确保不被主窗口盖住；
+      3. 相对主窗口居中 —— 主窗口移到哪，它就弹在哪儿附近，好找。
+    返回值：用户输入的字符串；点取消或直接关闭窗口则返回 None。
+    """
+    dlg = tk.Toplevel(root)
+    dlg.title(title)
+    dlg.configure(bg=WINDOW_BG)
+    dlg.resizable(False, False)
+
+    # 1) 依附主窗口 + 置顶，保证不被主窗口挡住
+    dlg.transient(root)
+    dlg.attributes("-topmost", True)
+
+    result = {"value": None}
+
+    body = tk.Frame(dlg, bg=WINDOW_BG)
+    body.pack(fill="both", expand=True, padx=16, pady=(14, 0))
+    tk.Label(body, text=prompt, bg=WINDOW_BG, fg=TEXT_MAIN,
+             font=("Microsoft YaHei", 10), anchor="w").pack(fill="x")
+
+    entry = tk.Entry(body, font=("Microsoft YaHei", 10), width=28,
+                     relief="solid", bd=1, bg="white", fg=TEXT_MAIN)
+    entry.pack(fill="x", pady=(8, 0))
+    entry.insert(0, initial)
+    entry.select_range(0, "end")
+
+    def on_ok(_event=None):
+        text = entry.get().strip()
+        # 空名字没有意义，直接当作没输入（与原 askstring 的行为保持一致）
+        result["value"] = text if text else None
+        dlg.destroy()
+
+    def on_cancel(_event=None):
+        result["value"] = None
+        dlg.destroy()
+
+    btns = tk.Frame(dlg, bg=WINDOW_BG)
+    btns.pack(fill="x", padx=16, pady=(14, 14))
+    tk.Button(btns, text="取消", font=("Microsoft YaHei", 9),
+              bg="#e2e8f0", fg=TEXT_MAIN, relief="flat", cursor="hand2",
+              activebackground="#cbd5e1",
+              command=on_cancel).pack(side="right", padx=18, ipady=2)
+    tk.Button(btns, text="确定", font=("Microsoft YaHei", 9),
+              bg="#3b82f6", fg="white", relief="flat", cursor="hand2",
+              activebackground="#2563eb", activeforeground="white",
+              command=on_ok).pack(side="right", padx=(18, 8), ipady=2)
+
+    dlg.bind("<Return>", on_ok)
+    dlg.bind("<Escape>", on_cancel)
+    dlg.protocol("WM_DELETE_WINDOW", on_cancel)
+
+    # 2) 先渲染再量尺寸，然后相对主窗口居中
+    dlg.update_idletasks()
+    w, h = dlg.winfo_width(), dlg.winfo_height()
+    x = root.winfo_x() + (root.winfo_width() - w) // 2
+    y = root.winfo_y() + (root.winfo_height() - h) // 2
+    dlg.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+
+    # 3) 抓住焦点，避免输入落到主窗口
+    dlg.grab_set()
+    entry.focus_force()
+    keep_titlebar_active(_get_top_hwnd(dlg))
+
+    root.wait_window(dlg)
+    return result["value"]
+
+
 def rename_zone(cfg_dict, sv_var, lbl_widget):
     """右键：修改区域名称"""
-    new_name = simpledialog.askstring("修改名称", "输入新名称：",
-                                      initialvalue=cfg_dict["name"])
-    if new_name and new_name.strip():
-        cfg_dict["name"] = new_name.strip()
+    new_name = _ask_string_dialog("修改名称", "输入新名称：",
+                                  initial=cfg_dict["name"])
+    if new_name:
+        cfg_dict["name"] = new_name
         sv_var.set(cfg_dict["name"])
         zone_meta[lbl_widget] = {"color": cfg_dict["color"], "text": cfg_dict["name"]}
         save_all()
