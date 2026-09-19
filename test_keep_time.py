@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""验证「带时间结构移动」：搬运不许改创建时间 / 修改时间。
+"""验证「附带结构」：搬运不许改创建时间 / 修改时间。
 
 不启动界面，只 import 文件归档器里的底层函数来测。
 注意：模块顶层会 `import tkinterdnd2` 并执行界面构建，所以这里不是
@@ -18,7 +18,7 @@ SRC_FILE = r"E:\文件整理脚本\文件归档器.py"
 # ---------------------------------------------------------------
 src = open(SRC_FILE, encoding="utf-8").read()
 
-BEGIN = "# 无损搬运：「带时间结构移动」用到的底层"
+BEGIN = "# 无损搬运：「附带结构」用到的底层"
 END = "def move_preserving_times"
 
 i = src.index(BEGIN)
@@ -221,7 +221,7 @@ try:
           abs(os.stat(f6_dst).st_mtime - OLD_UNIX) < 2)
 
     # ===========================================================
-    # 6) copy_preserving_times（仅复制 + 带时间结构移动）
+    # 6) copy_preserving_times（仅复制 + 附带结构）
     # ===========================================================
     d7 = os.path.join(workspace, "d7")
     os.makedirs(d7)

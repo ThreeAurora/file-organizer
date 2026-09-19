@@ -14,7 +14,7 @@ from tkinter import messagebox, filedialog, colorchooser, simpledialog
 
 
 # ============================================================
-# 无损搬运：「带时间结构移动」用到的底层
+# 无损搬运：「附带结构」用到的底层
 #
 # 同一个卷（盘）内搬运走 os.rename —— 只改目录项里那个名字，
 # 文件一个字节都不动。所以再大的文件夹也是瞬间完成，耗时和里面
@@ -169,7 +169,7 @@ def move_dir(src, dst):
 
 
 def move_preserving_times(src, dst):
-    """「带时间结构移动」的统一入口：文件夹整体搬，文件单独搬。"""
+    """「附带结构」的统一入口：文件夹整体搬，文件单独搬。"""
     if os.path.isdir(src) and not os.path.islink(src):
         move_dir(src, dst)
     else:
@@ -177,7 +177,7 @@ def move_preserving_times(src, dst):
 
 
 def copy_preserving_times(src, dst):
-    """「仅复制」且开了「带时间结构移动」：复制完把创建时间也写回去。"""
+    """「仅复制」且开了「附带结构」：复制完把创建时间也写回去。"""
     if os.path.isdir(src) and not os.path.islink(src):
         def _copy_one(s, d):
             shutil.copy2(s, d)
@@ -489,7 +489,7 @@ _year_zone_idx = 0  # 那年今日绑定的文件夹索引
 _year_picked = 0  # 那年今日中最后操作过的年份
 use_everything = False  # 用 Everything 打开路径
 ev_path = DEFAULT_EV_PATH  # Everything.exe 路径
-use_keep_time = False  # 带时间结构移动：整体搬运，创建/修改时间一个都不许动
+use_keep_time = False  # 附带结构：整体搬运，创建/修改时间一个都不许动
 
 # 弹窗单例引用（避免重复打开）
 _settings_win = None
@@ -573,7 +573,7 @@ def move_worker(item_list, status_var, label, root_window, base_dir=None, overri
 
             if use_copy:
                 if use_keep_time:
-                    # 保留了时间结构，复制也不能把创建时间洗成今天
+                    # 开了「附带结构」，复制也不能把创建时间洗成今天
                     copy_preserving_times(item_path, final_dest)
                 elif os.path.isdir(item_path):
                     shutil.copytree(item_path, final_dest)
@@ -792,7 +792,7 @@ def update_year_mode_ui():
             lbl.master.config(bg=c)
             zone_meta[lbl] = {"color": c, "text": cg["name"]}
 
-    # 退出那年今日时，如果「带时间结构移动」开着，两个时间按钮仍然
+    # 退出那年今日时，如果「附带结构」开着，两个时间按钮仍然
     # 不该出现 —— 上面刚把它们 pack 回来了，这里再收一次
     _update_time_buttons_visible()
 
@@ -859,17 +859,17 @@ def toggle_everything():
 
 
 def toggle_keep_time():
-    """带时间结构移动：整体搬运，创建/修改时间一个都不许动。
+    """附带结构：整体搬运，创建/修改时间一个都不许动。
 
     开的时候把「修改时间 / 创建时间」两个按钮收起来 —— 这两个按钮是
-    「按哪个时间去归类」的选择器，勾上「带时间结构移动」以后就不再按
+    「按哪个时间去归类」的选择器，勾上「附带结构」以后就不再按
     时间去拆结构了，留着只会让人以为还能改。跟「那年今日」是同一套做法。
     """
     global use_keep_time
     if is_processing:
         return
     use_keep_time = not use_keep_time
-    keep_btn.config(text="☑ 带时间结构移动" if use_keep_time else "☐ 带时间结构移动")
+    keep_btn.config(text="☑ 附带结构" if use_keep_time else "☐ 附带结构")
     _update_time_buttons_visible()
     save_all()
 
@@ -1214,11 +1214,11 @@ def show_help():
               "点击格子 → 打开文件夹（未配置则选择路径）\n"
               "右键格子 → 修改名称 / 重新选择路径 / 配置颜色").pack(fill="x", pady=(0, 8))
     _add_card(L, "底部选项",
-              "第一排：仅复制 / 那年今日 / 带时间结构移动 / 具体到日\n"
+              "第一排：仅复制 / 那年今日 / 附带结构 / 具体到日\n"
               "第二排：修改·创建时间 / 置顶窗口 / Everything\n"
               "☑ 仅复制 → 复制文件（关闭后为移动文件）\n"
               "☑ 那年今日 → 见右侧那年今日说明\n"
-              "☑ 带时间结构移动 → 见右侧说明（勾选后两个时间按钮会收起）\n"
+              "☑ 附带结构 → 见右侧说明（勾选后两个时间按钮会收起）\n"
               "☑ 具体到日 → 例：开启后归档到 2026/07/2026-07-01\n"
               "    关闭则只到 2026/07\n"
               "☑ 置顶窗口 → 窗口始终在最前\n"
@@ -1237,8 +1237,8 @@ def show_help():
               "「新建今天」→ 在当前文件夹下创建今天的日期文件夹\n"
               "「新建本月」→ 在当前文件夹下批量创建本月全部日期\n"
               "（已存在的日期自动跳过）").pack(fill="x", pady=(0, 8))
-    _add_card(R, "带时间结构移动",
-              "☑ 带时间结构移动 → 整体搬运，绝不拆开\n"
+    _add_card(R, "附带结构",
+              "☑ 附带结构 → 整体搬运，绝不拆开\n"
               "拖动文件夹时，连同里面整个结构一起走，\n"
               "而不是把里面的文件拆散挨个搬。\n"
               "\n"
@@ -1500,8 +1500,8 @@ year_btn = tk.Button(left_group, text="☐ 那年今日", bg=CTRL_BG, fg=TEXT_MA
                      command=toggle_year_mode)
 year_btn.pack(side="left", ipady=2, padx=(4, 4))
 
-# 带时间结构移动
-keep_btn = tk.Button(left_group, text="☐ 带时间结构移动", bg=CTRL_BG, fg=TEXT_MAIN,
+# 附带结构
+keep_btn = tk.Button(left_group, text="☐ 附带结构", bg=CTRL_BG, fg=TEXT_MAIN,
                      font=FONT_CTRL, relief="flat", cursor="hand2", bd=0,
                      activebackground="#e8ecf1", activeforeground=TEXT_MAIN,
                      command=toggle_keep_time)
@@ -1639,7 +1639,7 @@ if use_everything:
 ev_path = _settings.get('ev_path', '')
 use_keep_time = _settings.get('use_keep_time', False)
 if use_keep_time:
-    keep_btn.config(text="☑ 带时间结构移动")
+    keep_btn.config(text="☑ 附带结构")
     _update_time_buttons_visible()
 
 root.mainloop()

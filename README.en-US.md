@@ -33,7 +33,7 @@
 |---|---|
 | 🖼 **Nine drag zones** | Nine target zones, each bound to any folder; drop to archive under the current rules, with toast feedback |
 | ⏱ **Time rules** | Created (ctime) / modified (mtime) one-click switch · automatic year / month layers · "down to day" toggle · copy-only mode (originals untouched) |
-| 🗂 **Move with time structure** | Moves things whole, never taken apart: **instant rename on the same drive, and copying across drives does not rewrite creation time**. Checking it tucks away the two time buttons |
+| 🗂 **Carry the structure** | Moves things whole, never taken apart: **instant rename on the same drive, and copying across drives does not rewrite creation time**. Checking it tucks away the two time buttons |
 | 📅 **That Day in History** | A unique look-back mode: browse old files by year (starts 8 years back), one-click "that day / that month" folders, flip through years freely |
 | 🔎 **Everything integration** | Auto-detects Everything.exe; when enabled, opens / locates results with Everything — whole-disk speed |
 | 🎨 **Zone personalization** | Per-zone color (color picker) with automatic dark text · rename zones · re-pick paths |
@@ -65,9 +65,9 @@ Output: `dist/文件归档器.exe`.
 
 ---
 
-## 🗂 Move with time structure
+## 🗂 Carry the structure
 
-The「☑ 带时间结构移动」(Move with time structure) toggle in the bottom bar is the master switch for how things are transported. Off by default.
+The「☑ 附带结构」(Carry the structure) toggle in the bottom bar is the master switch for how things are transported. Off by default.
 
 **The problem it solves**: the default path uses `shutil.move`. Same drive is fine, but **across drives it genuinely copies** — and copying resets a file's *creation time* to the current moment. `shutil.copy2` only preserves the modification time, not the creation time. So after moving a batch of old photos you would find their creation dates **all turned into today**.
 
