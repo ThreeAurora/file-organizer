@@ -1,4 +1,4 @@
-('E:\\文件整理脚本\\_bw_r\\文件归档器\\PYZ-00.pyz',
+('E:\\文件整理脚本\\_pc3\\work\\文件归档器\\PYZ-00.pyz',
  [('_compat_pickle', 'E:\\miniconda3\\Lib\\_compat_pickle.py', 'PYMODULE-2'),
   ('_compression', 'E:\\miniconda3\\Lib\\_compression.py', 'PYMODULE-2'),
   ('_py_abc', 'E:\\miniconda3\\Lib\\_py_abc.py', 'PYMODULE-2'),

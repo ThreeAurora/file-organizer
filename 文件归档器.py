@@ -275,24 +275,86 @@ CONFIG_PATH = os.path.join(os.environ.get('APPDATA', ''), '文件归档器', 'co
 
 
 
-def load_config():
-    """加载配置，文件不存在则返回空白默认"""
+def _atomic_write_json(path, data):
+    """原子写：先写同目录临时文件，成功后再替换正式文件。
+
+    以前是直接 open(path, 'w') 写正式文件 —— open(..., 'w') 会先清空内容，
+    如果这时进程被强杀/断电，配置就永久变成 0 字节，之后每次保存都在
+    json.load() 读空文件时炸掉，弹「保存失败」，再也存不进去。
+    改成先写 .tmp 再 os.replace（同一磁盘上是原子操作），
+    最坏情况也只是留下一个垃圾 .tmp，正式文件永远是完整的。
+    """
+    d = os.path.dirname(path)
+    os.makedirs(d, exist_ok=True)
+    tmp = path + '.tmp'
     try:
-        with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
-            data = json.load(f)
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        # 替换前先把上一版留个副本，万一新内容有问题还能退回
+        if os.path.exists(path):
+            try:
+                shutil.copy2(path, path + '.bak')
+            except Exception:
+                pass
+        os.replace(tmp, path)
+    finally:
+        # 中途失败（比如数据里有不能序列化的东西）时把临时文件清掉，
+        # 别在用户配置目录里留垃圾
+        if os.path.exists(tmp):
+            try:
+                os.remove(tmp)
+            except Exception:
+                pass
+
+
+def _read_json_with_recovery(path):
+    """读 JSON；文件损坏/为空时尝试从 .bak 找回，仍不行则返回 None。
+
+    返回 (数据, 备注)；数据为 None 表示彻底读不出来。
+    """
+    if not os.path.exists(path):
+        return None, '文件不存在'
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            return json.load(f), ''
+    except Exception as e:
+        # 正式文件坏了 —— 试着从 .bak 捞回来，并且把好的内容写回正式文件
+        bak = path + '.bak'
+        if os.path.exists(bak):
+            try:
+                with open(bak, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                try:
+                    _atomic_write_json(path, data)
+                except Exception:
+                    pass
+                return data, f'原文件损坏({e})，已从备份恢复'
+            except Exception:
+                pass
+        try:
+            if os.path.getsize(path) == 0:
+                return None, '文件是空的（可能上次写入被中断）'
+        except Exception:
+            pass
+        return None, str(e)
+
+
+def load_config():
+    """加载配置；文件损坏时先尝试从 .bak 自愈，再退回默认"""
+    data, _note = _read_json_with_recovery(CONFIG_PATH)
+    if isinstance(data, dict):
         zones = data.get('zones', [])
         if zones and len(zones) == 9:
             return zones
-    except:
-        pass
     return [dict(z) for z in DEFAULT_ZONES]
 
 
 def load_settings():
-    """加载开关状态，文件不存在返回默认"""
-    try:
-        with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
-            data = json.load(f)
+    """加载开关状态；文件损坏时先尝试从 .bak 自愈，再退回默认"""
+    data, _note = _read_json_with_recovery(CONFIG_PATH)
+    if isinstance(data, dict):
         s = data.get('settings', {})
         return {
             'use_copy': s.get('use_copy', False),
@@ -304,8 +366,6 @@ def load_settings():
             'ev_path': s.get('ev_path', DEFAULT_EV_PATH),
             'use_keep_time': s.get('use_keep_time', False),
         }
-    except:
-        pass
     return {'use_copy': False, 'use_day': True, 'use_ctime': False,
             'is_topmost': True, 'use_year_mode': False,
             'use_everything': False, 'ev_path': DEFAULT_EV_PATH,
@@ -316,10 +376,10 @@ def save_all():
     """保存所有配置：区域 + 窗口 + 通用颜色 + 开关状态"""
     try:
         os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
-        if os.path.exists(CONFIG_PATH):
-            with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-        else:
+        # 读现有配置；万一文件是坏的/空的，用恢复逻辑兜住，
+        # 绝不能因为读失败就把整份配置丢掉
+        data, _note = _read_json_with_recovery(CONFIG_PATH)
+        if not isinstance(data, dict):
             data = {}
         data['zones'] = ZONE_CONFIGS
         data['window'] = {
@@ -337,11 +397,15 @@ def save_all():
             'ev_path': ev_path,
             'use_keep_time': use_keep_time,
         }
-        with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        _atomic_write_json(CONFIG_PATH, data)
         return True
     except Exception as e:
-        messagebox.showerror("保存失败", f"无法写入配置文件：\n{e}")
+        messagebox.showerror(
+            "保存失败",
+            f"无法写入配置文件：\n{e}\n\n"
+            f"配置文件位置：\n{CONFIG_PATH}\n\n"
+            f"同一目录下的 config.json.bak 是上一版完整备份，\n"
+            f"可把它改名成 config.json 手动恢复。")
         return False
 
 
@@ -350,16 +414,13 @@ ZONE_CONFIGS = load_config()
 
 
 def load_window_state():
-    """读取窗口位置/大小，首次启动返回 None"""
-    try:
-        with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
-            data = json.load(f)
+    """读取窗口位置/大小；文件损坏时先尝试从 .bak 自愈，首次启动返回 None"""
+    data, _note = _read_json_with_recovery(CONFIG_PATH)
+    if isinstance(data, dict):
         w = data.get('window', {})
         if w:
             return (w.get('x'), w.get('y'),
                     w.get('width', WINDOW_W), w.get('height', WINDOW_H))
-    except:
-        pass
     return None
 
 
@@ -1389,13 +1450,9 @@ for idx, cfg in enumerate(ZONE_CONFIGS):
 # ---- 通用整理区 (第 4 行，跨 3 列) ----
 # 加载通用整理颜色（存配置，重启不丢失）
 gen_color = GENERAL_COLOR
-try:
-    with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
-        _gc = json.load(f).get('general_color')
-        if _gc:
-            gen_color = _gc
-except:
-    pass
+_gc_data, _ = _read_json_with_recovery(CONFIG_PATH)
+if isinstance(_gc_data, dict) and _gc_data.get('general_color'):
+    gen_color = _gc_data['general_color']
 
 gen_frame = tk.Frame(main, bg=gen_color, bd=1, relief="raised")
 gen_frame.grid(row=3, column=0, columnspan=3, padx=2, pady=(5, 2), sticky="nsew")
