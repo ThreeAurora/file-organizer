@@ -8,8 +8,190 @@ import threading
 import time
 import shutil
 import tkinter as tk
+from ctypes import wintypes
 from tkinterdnd2 import DND_FILES, TkinterDnD
 from tkinter import messagebox, filedialog, colorchooser, simpledialog
+
+
+# ============================================================
+# 无损搬运：「带时间结构移动」用到的底层
+#
+# 同一个卷（盘）内搬运走 os.rename —— 只改目录项里那个名字，
+# 文件一个字节都不动。所以再大的文件夹也是瞬间完成，耗时和里面
+# 有多少文件无关，且创建/修改时间原样保留，什么都不用管。
+#
+# 跨卷没法改名，只能真复制一份。而复制会把「创建时间」重置成
+# 当前时刻 —— shutil.copy2 也只保得住修改时间，保不住创建时间。
+# 所以跨卷时复制完要手动把创建时间写回去。
+#
+# 注意：os.utime 只能改「修改/访问」时间，改不了创建时间，
+# 必须走 Win32 的 SetFileTime。这就是下面这段 ctypes 的用途。
+# ============================================================
+_IS_WINDOWS = os.name == "nt"
+
+if _IS_WINDOWS:
+    _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+
+    _FILE_READ_ATTRIBUTES = 0x0080
+    _FILE_WRITE_ATTRIBUTES = 0x0100
+    _OPEN_EXISTING = 3
+    _FILE_FLAG_BACKUP_SEMANTICS = 0x02000000   # 想打开「文件夹」必须带这个
+
+    _kernel32.CreateFileW.argtypes = [
+        wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
+        wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+    _kernel32.CreateFileW.restype = wintypes.HANDLE
+
+    for _fn in ("SetFileTime", "GetFileTime"):
+        getattr(_kernel32, _fn).argtypes = [
+            wintypes.HANDLE, ctypes.POINTER(wintypes.FILETIME),
+            ctypes.POINTER(wintypes.FILETIME), ctypes.POINTER(wintypes.FILETIME)]
+        getattr(_kernel32, _fn).restype = wintypes.BOOL
+
+    _kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+
+    _INVALID_HANDLE = wintypes.HANDLE(-1).value
+
+
+def _open_handle(path, access):
+    """打开一个文件或文件夹的句柄（带 FILE_FLAG_BACKUP_SEMANTICS）。"""
+    h = _kernel32.CreateFileW(path, access, 0, None, _OPEN_EXISTING,
+                              _FILE_FLAG_BACKUP_SEMANTICS, None)
+    if h == _INVALID_HANDLE:
+        raise OSError(ctypes.get_last_error(), "打不开", path)
+    return h
+
+
+def get_creation_time(path):
+    """读创建时间，返回 FILETIME 整数；读不到返回 None。"""
+    if not _IS_WINDOWS:
+        return None
+    try:
+        h = _open_handle(path, _FILE_READ_ATTRIBUTES)
+    except OSError:
+        return None
+    try:
+        c, a, m = wintypes.FILETIME(), wintypes.FILETIME(), wintypes.FILETIME()
+        if not _kernel32.GetFileTime(h, ctypes.byref(c), ctypes.byref(a),
+                                     ctypes.byref(m)):
+            return None
+        return c.dwLowDateTime | (c.dwHighDateTime << 32)
+    finally:
+        _kernel32.CloseHandle(h)
+
+
+def set_creation_time(path, filetime):
+    """把创建时间写回去。失败就返回 False —— 时间戳保不住也不该让搬运崩掉。"""
+    if not _IS_WINDOWS or filetime is None:
+        return False
+    try:
+        h = _open_handle(path, _FILE_WRITE_ATTRIBUTES)
+    except OSError:
+        return False
+    try:
+        c = wintypes.FILETIME(filetime & 0xFFFFFFFF, filetime >> 32)
+        return bool(_kernel32.SetFileTime(h, ctypes.byref(c), None, None))
+    finally:
+        _kernel32.CloseHandle(h)
+
+
+def same_volume(a, b):
+    """两个路径是不是在同一个卷上。"""
+    da = os.path.splitdrive(os.path.abspath(a))[0].lower()
+    db = os.path.splitdrive(os.path.abspath(b))[0].lower()
+    return bool(da) and da == db
+
+
+def _copy2_keep_creation(src, dst):
+    """copy2（保住修改时间）之后，再把创建时间也写回去。"""
+    shutil.copy2(src, dst)
+    set_creation_time(dst, get_creation_time(src))
+    return dst
+
+
+def move_file(src, dst):
+    """搬一个文件，创建时间与修改时间都不许变。
+
+    同卷 -> os.rename，瞬间完成，所有时间戳原样保留。
+    跨卷 -> 复制 + 写回创建时间 + 删掉源文件。
+    """
+    if same_volume(src, dst):
+        try:
+            os.rename(src, dst)
+            return
+        except OSError:
+            pass                      # 同卷也可能失败（被占用等），退回复制
+
+    try:
+        _copy2_keep_creation(src, dst)
+    except Exception:
+        # 复制没成功就把半截目标清掉，源文件保持不动
+        if os.path.exists(dst):
+            try:
+                os.remove(dst)
+            except Exception:
+                pass
+        raise
+    os.remove(src)
+
+
+def move_dir(src, dst):
+    """搬一个文件夹，连同里面整棵树，当作「一件东西」整体走。
+
+    同卷 -> os.rename，瞬间完成。里面有多少文件都一样快，
+            而且每个文件的创建时间压根没被碰过。
+    跨卷 -> 复制整棵树，顺手把每个文件、每个子文件夹的创建时间写回去，
+            最后删掉源文件夹。
+    """
+    if same_volume(src, dst):
+        try:
+            os.rename(src, dst)
+            return
+        except OSError:
+            pass
+
+    # ---- 跨卷：真复制 ----
+    def _copy_one(s, d):
+        shutil.copy2(s, d)
+        set_creation_time(d, get_creation_time(s))
+        return d
+
+    shutil.copytree(src, dst, symlinks=True, copy_function=_copy_one)
+
+    # 目录的创建时间要最后写：往目录里写东西会刷新它自己的时间戳，
+    # 必须等内容全部落定之后再改。深的先处理，浅的后处理。
+    for root, _dirs, _files in os.walk(src, topdown=False):
+        rel = os.path.relpath(root, src)
+        target = dst if rel == "." else os.path.join(dst, rel)
+        set_creation_time(target, get_creation_time(root))
+
+    shutil.rmtree(src)
+
+
+def move_preserving_times(src, dst):
+    """「带时间结构移动」的统一入口：文件夹整体搬，文件单独搬。"""
+    if os.path.isdir(src) and not os.path.islink(src):
+        move_dir(src, dst)
+    else:
+        move_file(src, dst)
+
+
+def copy_preserving_times(src, dst):
+    """「仅复制」且开了「带时间结构移动」：复制完把创建时间也写回去。"""
+    if os.path.isdir(src) and not os.path.islink(src):
+        def _copy_one(s, d):
+            shutil.copy2(s, d)
+            set_creation_time(d, get_creation_time(s))
+            return d
+
+        shutil.copytree(src, dst, symlinks=True, copy_function=_copy_one)
+        for root, _dirs, _files in os.walk(src, topdown=False):
+            rel = os.path.relpath(root, src)
+            target = dst if rel == "." else os.path.join(dst, rel)
+            set_creation_time(target, get_creation_time(root))
+    else:
+        shutil.copy2(src, dst)
+        set_creation_time(dst, get_creation_time(src))
 
 # ============================================================
 # 高 DPI 适配（4K 屏等）
@@ -120,10 +302,14 @@ def load_settings():
             'use_year_mode': s.get('use_year_mode', False),
             'use_everything': s.get('use_everything', False),
             'ev_path': s.get('ev_path', DEFAULT_EV_PATH),
+            'use_keep_time': s.get('use_keep_time', False),
         }
     except:
         pass
-    return {'use_copy': False, 'use_day': True, 'use_ctime': False, 'is_topmost': True, 'use_year_mode': False, 'use_everything': False, 'ev_path': DEFAULT_EV_PATH}
+    return {'use_copy': False, 'use_day': True, 'use_ctime': False,
+            'is_topmost': True, 'use_year_mode': False,
+            'use_everything': False, 'ev_path': DEFAULT_EV_PATH,
+            'use_keep_time': False}
 
 
 def save_all():
@@ -149,6 +335,7 @@ def save_all():
             'use_year_mode': use_year_mode,
             'use_everything': use_everything,
             'ev_path': ev_path,
+            'use_keep_time': use_keep_time,
         }
         with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
@@ -302,6 +489,7 @@ _year_zone_idx = 0  # 那年今日绑定的文件夹索引
 _year_picked = 0  # 那年今日中最后操作过的年份
 use_everything = False  # 用 Everything 打开路径
 ev_path = DEFAULT_EV_PATH  # Everything.exe 路径
+use_keep_time = False  # 带时间结构移动：整体搬运，创建/修改时间一个都不许动
 
 # 弹窗单例引用（避免重复打开）
 _settings_win = None
@@ -384,12 +572,20 @@ def move_worker(item_list, status_var, label, root_window, base_dir=None, overri
                     c += 1
 
             if use_copy:
-                if os.path.isdir(item_path):
+                if use_keep_time:
+                    # 保留了时间结构，复制也不能把创建时间洗成今天
+                    copy_preserving_times(item_path, final_dest)
+                elif os.path.isdir(item_path):
                     shutil.copytree(item_path, final_dest)
                 else:
                     shutil.copy2(item_path, final_dest)
             else:
-                shutil.move(item_path, final_dest)
+                if use_keep_time:
+                    # 整体搬走，不拆开；同盘瞬间改名，跨盘复制也会把
+                    # 创建时间/修改时间原样写回去
+                    move_preserving_times(item_path, final_dest)
+                else:
+                    shutil.move(item_path, final_dest)
         except Exception as e:
             print(f"Error moving {item_path}: {e}")
 
@@ -596,6 +792,10 @@ def update_year_mode_ui():
             lbl.master.config(bg=c)
             zone_meta[lbl] = {"color": c, "text": cg["name"]}
 
+    # 退出那年今日时，如果「带时间结构移动」开着，两个时间按钮仍然
+    # 不该出现 —— 上面刚把它们 pack 回来了，这里再收一次
+    _update_time_buttons_visible()
+
 
 # ============================================================
 # 控制按钮回调
@@ -656,6 +856,33 @@ def toggle_everything():
     ev_btn.config(text="☑ Everything" if use_everything else "☐ Everything")
     save_all()
     save_all()
+
+
+def toggle_keep_time():
+    """带时间结构移动：整体搬运，创建/修改时间一个都不许动。
+
+    开的时候把「修改时间 / 创建时间」两个按钮收起来 —— 这两个按钮是
+    「按哪个时间去归类」的选择器，勾上「带时间结构移动」以后就不再按
+    时间去拆结构了，留着只会让人以为还能改。跟「那年今日」是同一套做法。
+    """
+    global use_keep_time
+    if is_processing:
+        return
+    use_keep_time = not use_keep_time
+    keep_btn.config(text="☑ 带时间结构移动" if use_keep_time else "☐ 带时间结构移动")
+    _update_time_buttons_visible()
+    save_all()
+
+
+def _update_time_buttons_visible():
+    """按 use_keep_time 显示/隐藏两个时间模式按钮。"""
+    if use_keep_time:
+        time_mod_frame.pack_forget()
+        time_create_frame.pack_forget()
+    else:
+        # 必须放在 copy_btn 之前、ev_frame 之前，恢复原本的排列顺序
+        time_mod_frame.pack(side="left", padx=0, before=copy_btn)
+        time_create_frame.pack(side="left", padx=0, before=ev_frame)
 
 
 _year_ui_active = False  # 那年今日界面是否已激活
@@ -987,10 +1214,11 @@ def show_help():
               "点击格子 → 打开文件夹（未配置则选择路径）\n"
               "右键格子 → 修改名称 / 重新选择路径 / 配置颜色").pack(fill="x", pady=(0, 8))
     _add_card(L, "底部选项",
-              "第一排：仅复制 / 那年今日 / 具体到日 / 修改·创建时间\n"
-              "第二排：置顶窗口 / Everything\n"
+              "第一排：仅复制 / 那年今日 / 带时间结构移动 / 具体到日\n"
+              "第二排：修改·创建时间 / 置顶窗口 / Everything\n"
               "☑ 仅复制 → 复制文件（关闭后为移动文件）\n"
               "☑ 那年今日 → 见右侧那年今日说明\n"
+              "☑ 带时间结构移动 → 见右侧说明（勾选后两个时间按钮会收起）\n"
               "☑ 具体到日 → 例：开启后归档到 2026/07/2026-07-01\n"
               "    关闭则只到 2026/07\n"
               "☑ 置顶窗口 → 窗口始终在最前\n"
@@ -1009,6 +1237,21 @@ def show_help():
               "「新建今天」→ 在当前文件夹下创建今天的日期文件夹\n"
               "「新建本月」→ 在当前文件夹下批量创建本月全部日期\n"
               "（已存在的日期自动跳过）").pack(fill="x", pady=(0, 8))
+    _add_card(R, "带时间结构移动",
+              "☑ 带时间结构移动 → 整体搬运，绝不拆开\n"
+              "拖动文件夹时，连同里面整个结构一起走，\n"
+              "而不是把里面的文件拆散挨个搬。\n"
+              "\n"
+              "同一块盘：只改个名字，瞬间完成，\n"
+              "再大的文件夹也一样快。\n"
+              "跨盘：真复制，但会手动把「创建时间」写回去，\n"
+              "—— 复制不会把创建时间洗成今天。\n"
+              "\n"
+              "勾选后「修改时间 / 创建时间」两个按钮会收起：\n"
+              "这两个按钮是「按哪个时间去归类」的选择器，\n"
+              "开了它就不再按时间去拆结构了。\n"
+              "\n"
+              "配合「仅复制」使用 → 复制出来的副本同样保留创建时间").pack(fill="x", pady=(0, 8))
     _add_card(R, "题外话",
               "我有整理爱好，但文件数量达百万级，我无从下手\n"
               "所以它诞生了——简洁、极速\n"
@@ -1257,6 +1500,13 @@ year_btn = tk.Button(left_group, text="☐ 那年今日", bg=CTRL_BG, fg=TEXT_MA
                      command=toggle_year_mode)
 year_btn.pack(side="left", ipady=2, padx=(4, 4))
 
+# 带时间结构移动
+keep_btn = tk.Button(left_group, text="☐ 带时间结构移动", bg=CTRL_BG, fg=TEXT_MAIN,
+                     font=FONT_CTRL, relief="flat", cursor="hand2", bd=0,
+                     activebackground="#e8ecf1", activeforeground=TEXT_MAIN,
+                     command=toggle_keep_time)
+keep_btn.pack(side="left", ipady=2, padx=(4, 4))
+
 day_btn = tk.Button(left_group, text="☑ 具体到日", bg=CTRL_BG, fg=TEXT_MAIN,
                     font=FONT_CTRL, relief="flat", cursor="hand2", bd=0,
                     activebackground="#e8ecf1", activeforeground=TEXT_MAIN,
@@ -1354,12 +1604,13 @@ help_btn.bind("<Leave>", help_leave)
 # 开关按钮的悬停效果
 def _toggle_enter(e): e.widget.config(bg="#e8ecf1")
 def _toggle_leave(e): e.widget.config(bg=CTRL_BG)
-for _btn in (day_btn, copy_btn, topmost_btn, year_btn, ev_btn):
+for _btn in (day_btn, copy_btn, topmost_btn, year_btn, keep_btn, ev_btn):
     _btn.bind("<Enter>", _toggle_enter)
     _btn.bind("<Leave>", _toggle_leave)
 
 
-for w in (day_btn, copy_btn, topmost_btn, year_btn, ev_btn, btn_modify, btn_create, help_btn):
+for w in (day_btn, copy_btn, topmost_btn, year_btn, keep_btn,
+          ev_btn, btn_modify, btn_create, help_btn):
     w.bind("<Button-1>", lambda e: None)
 
 # -- 恢复上次开关状态 --
@@ -1386,5 +1637,9 @@ use_everything = _settings['use_everything']
 if use_everything:
     ev_btn.config(text="☑ Everything")
 ev_path = _settings.get('ev_path', '')
+use_keep_time = _settings.get('use_keep_time', False)
+if use_keep_time:
+    keep_btn.config(text="☑ 带时间结构移动")
+    _update_time_buttons_visible()
 
 root.mainloop()

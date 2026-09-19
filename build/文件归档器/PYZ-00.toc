@@ -1,4 +1,4 @@
-('E:\\文件整理脚本\\build\\文件归档器\\PYZ-00.pyz',
+('E:\\文件整理脚本\\_bw3\\文件归档器\\PYZ-00.pyz',
  [('_compat_pickle', 'E:\\miniconda3\\Lib\\_compat_pickle.py', 'PYMODULE-2'),
   ('_compression', 'E:\\miniconda3\\Lib\\_compression.py', 'PYMODULE-2'),
   ('_py_abc', 'E:\\miniconda3\\Lib\\_py_abc.py', 'PYMODULE-2'),
@@ -20,6 +20,7 @@
   ('csv', 'E:\\miniconda3\\Lib\\csv.py', 'PYMODULE-2'),
   ('ctypes', 'E:\\miniconda3\\Lib\\ctypes\\__init__.py', 'PYMODULE-2'),
   ('ctypes._endian', 'E:\\miniconda3\\Lib\\ctypes\\_endian.py', 'PYMODULE-2'),
+  ('ctypes.wintypes', 'E:\\miniconda3\\Lib\\ctypes\\wintypes.py', 'PYMODULE-2'),
   ('dataclasses', 'E:\\miniconda3\\Lib\\dataclasses.py', 'PYMODULE-2'),
   ('datetime', 'E:\\miniconda3\\Lib\\datetime.py', 'PYMODULE-2'),
   ('decimal', 'E:\\miniconda3\\Lib\\decimal.py', 'PYMODULE-2'),

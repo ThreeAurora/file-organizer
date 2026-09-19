@@ -1,3 +1,6 @@
 # 防丢模式: dist 发布产物与 build/ PyInstaller 中间物均已入库(2026-09-02)
 __pycache__/
 *.pyc
+
+# 覆盖发布产物前的本地备份，不入库
+*.bak_*
