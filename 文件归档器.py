@@ -1156,23 +1156,17 @@ def show_help():
     _help_win = tk.Toplevel(root)
     hw = _help_win
     hw.title("使用手册")
-    hw.geometry("780x550")
-    hw.resizable(False, False)
     hw.configure(bg="white")
     hw.transient(root)
+    # 先只定宽度，高度等内容摆完再按实际需要撑开（写死高度会让新加的卡片被裁掉）
+    _HELP_W = 780
+    hw.geometry(f"{_HELP_W}x200")
 
     def on_destroy():
         global _help_win
         _help_win = None
         hw.destroy()
     hw.protocol("WM_DELETE_WINDOW", on_destroy)
-
-    hw.update_idletasks()
-    hw.update()
-    keep_titlebar_active(_get_top_hwnd(hw))
-    x = root.winfo_x() + (root.winfo_width() - 780) // 2
-    y = root.winfo_y() + (root.winfo_height() - 550) // 2
-    hw.geometry(f"+{x}+{y}")
 
     # 标题
     tk.Label(hw, text="文件归档器 by 简单", bg="white", fg="#000000",
@@ -1213,22 +1207,7 @@ def show_help():
               "拖放到「通用整理」→ 在原位置归档\n"
               "点击格子 → 打开文件夹（未配置则选择路径）\n"
               "右键格子 → 修改名称 / 重新选择路径 / 配置颜色").pack(fill="x", pady=(0, 8))
-    _add_card(L, "底部选项",
-              "第一排：仅复制 / 那年今日 / 附带结构 / 具体到日\n"
-              "第二排：修改·创建时间 / 置顶窗口 / Everything\n"
-              "☑ 仅复制 → 复制文件（关闭后为移动文件）\n"
-              "☑ 那年今日 → 见右侧那年今日说明\n"
-              "☑ 附带结构 → 见右侧说明（勾选后两个时间按钮会收起）\n"
-              "☑ 具体到日 → 例：开启后归档到 2026/07/2026-07-01\n"
-              "    关闭则只到 2026/07\n"
-              "☑ 置顶窗口 → 窗口始终在最前\n"
-              "☑ Everything → 点击格子后在 Everything 中搜索路径\n"
-              "    （点「选择路径」或「自动查找」配置 Everything）").pack(fill="x")
-
-    # 右列
-    R = tk.Frame(cols, bg="white")
-    R.grid(row=1, column=1, sticky="new", padx=(8, 0))
-    _add_card(R, "那年今日",
+    _add_card(L, "那年今日",
               "☑ 那年今日 → 点击九宫格进入「年份九宫格」\n"
               "（展示近 9 年，如 2018-2026），可翻页\n"
               "拖文件到某年即归档至那年的今天\n"
@@ -1236,7 +1215,11 @@ def show_help():
               "归档到 文件夹A/2018/07/2018-07-01\n"
               "「新建今天」→ 在当前文件夹下创建今天的日期文件夹\n"
               "「新建本月」→ 在当前文件夹下批量创建本月全部日期\n"
-              "（已存在的日期自动跳过）").pack(fill="x", pady=(0, 8))
+              "（已存在的日期自动跳过）").pack(fill="x")
+
+    # 右列
+    R = tk.Frame(cols, bg="white")
+    R.grid(row=1, column=1, sticky="new", padx=(8, 0))
     _add_card(R, "附带结构",
               "☑ 附带结构 → 整体搬运，绝不拆开\n"
               "拖动文件夹时，连同里面整个结构一起走，\n"
@@ -1257,10 +1240,45 @@ def show_help():
               "所以它诞生了——简洁、极速\n"
               "我按时间归类文件，每天只整理那年今日，明确而有趣\n").pack(fill="x")
 
+    # 底部选项横跨两列，放最底
+    _add_card(cols, "底部选项",
+              "第一排：仅复制 / 那年今日 / 附带结构 / 具体到日\n"
+              "第二排：修改·创建时间 / 置顶窗口 / Everything\n"
+              "☑ 仅复制 → 复制文件（关闭后为移动文件）\n"
+              "☑ 那年今日 → 见上方那年今日说明\n"
+              "☑ 附带结构 → 见上方说明（勾选后两个时间按钮会收起）\n"
+              "☑ 具体到日 → 例：开启后归档到 2026/07/2026-07-01\n"
+              "    关闭则只到 2026/07\n"
+              "☑ 置顶窗口 → 窗口始终在最前\n"
+              "☑ Everything → 点击格子后在 Everything 中搜索路径\n"
+              "    （点「选择路径」或「自动查找」配置 Everything）").grid(
+                  row=2, column=0, columnspan=2, sticky="ew", pady=(0, 0))
+
     tk.Button(hw, text="知道了", bg="#3b82f6", fg="white",
               font=("Microsoft YaHei", 11), relief="flat", cursor="hand2",
               activebackground="#2563eb", activeforeground="white",
-              command=on_destroy, padx=30, ipady=3).pack(pady=(8, 10))
+              command=on_destroy, padx=30).pack(pady=(8, 10), ipady=3)
+
+    # 内容全部摆好，现在量出真实需要的高度，再决定窗口尺寸与位置
+    # （以前写死 780x550，加了「附带结构」卡片后底部会被切掉看不见）
+    hw.update_idletasks()
+    need_h = hw.winfo_reqheight()
+    max_h = hw.winfo_screenheight() - 90          # 给任务栏留出空间
+    final_h = min(need_h, max_h)
+    final_w = _HELP_W
+    if final_w > hw.winfo_screenwidth() - 40:     # 小屏横向兜底
+        final_w = hw.winfo_screenwidth() - 40
+    hw.geometry(f"{final_w}x{final_h}")
+    # 装不下的极端情况：允许拉高，内容仍可看全
+    hw.resizable(False, need_h > max_h)
+
+    hw.update_idletasks()
+    keep_titlebar_active(_get_top_hwnd(hw))
+    x = root.winfo_x() + (root.winfo_width() - final_w) // 2
+    y = root.winfo_y() + (root.winfo_height() - final_h) // 2
+    if y < 0:
+        y = 0
+    hw.geometry(f"+{x}+{y}")
 
 
 # ============================================================
