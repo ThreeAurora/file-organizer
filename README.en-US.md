@@ -1,53 +1,109 @@
+<div align="center">
+
 # File Organizer
+
+**Drag once, and every file lands where it belongs — by date, by year, by your habit**
 
 [中文](./README.md) | English
 
-A Windows desktop file archiving tool: drop files onto window panes and they are automatically archived into the target directory according to rules (year/month, ctime/mtime time modes, copy/move). Also includes Everything search integration, pane color and rename options, window state memory, high-DPI support, and more.
+![Platform](https://img.shields.io/badge/platform-Windows-0078D6?style=flat-square&logo=windows&logoColor=white)
+![Python](https://img.shields.io/badge/Python-3.x-3776AB?style=flat-square&logo=python&logoColor=white)
 
-- Tech stack: Python + tkinter + tkinterdnd2 (drag-and-drop), with ctypes calling the Win32 API directly (title-bar active state, DragAcceptFiles, file creation-time read/write)
-- Packaging: PyInstaller single-file exe (`文件归档器.spec`, with embedded icon.ico, UPX-compressed)
-- Runtime log: `drop.log` (startup / drag-and-drop initialization records)
+</div>
 
-## Move with time structure
+---
 
-The「☑ 带时间结构移动」(Move with time structure) toggle in the bottom control bar is the master switch for how files are transported. It is off by default.
+## ✨ Why this tool
 
-**The problem it solves**: the default path uses `shutil.move`. Same drive is fine, but **across drives it genuinely copies** — and copying resets a file's "creation time" to the current moment. `shutil.copy2` only preserves the modification time, not the creation time. So after moving a batch of old photos you would find their creation dates all turned into today.
-
-**What it does**:
-
-| Case | Method | Result |
+| | File Organizer | Manual sorting |
 |---|---|---|
-| Same drive | `os.rename` | Instant, regardless of file count; all timestamps preserved |
-| Across drives | Copy, then write the creation time back | Neither creation nor modification time changes |
-| Dragging a folder | The whole tree moves as one unit | Every file and subfolder keeps its creation time |
+| 🖱 Archiving | Drop files onto a zone, release, done | Open folder → copy → paste → rename |
+| ⏱ Time rules | Created / modified time switchable, year / month layers, down to the day | Check dates and build folders by hand |
+| 📅 That Day in History | **Browse old files back through the years**, flip years with one click | No such concept |
+| 🔎 Locating | **Everything integration** — jump straight to the archived spot | Find and open it yourself |
+| 🧊 UI | Title bar never grays out, per-monitor high-DPI aware, moves run on a background thread | —— |
 
-The same-drive case is worth emphasising: a folder with 3000 files moves in **a few milliseconds**, because only the directory entry is renamed — not a single byte of content is touched.
+**Nine zones are just the nine folders you always visit: screenshots here, bills there, photos over there — just drag.**
 
-**Checking it hides the「修改时间 / 创建时间」buttons.** Those two buttons select *which timestamp to sort by*; once "Move with time structure" is on, structure is no longer split by time, so leaving them visible would only mislead. Unchecking restores them.
+---
 
-Relationship with 「仅复制」(copy only): with both on, the copy also keeps its creation time (it is a copy, not a move, so the source stays).
+## 📑 Features
 
-**Implementation notes**: `os.utime` can only change modification/access times, never creation time — that requires the Win32 `CreateFileW` + `SetFileTime`. Opening a directory handle requires `FILE_FLAG_BACKUP_SEMANTICS`. A directory's creation time must be written last, after all its contents have settled (writing into a directory refreshes its own timestamps), so `os.walk(topdown=False)` processes depth-first.
+| | |
+|---|---|
+| 🖼 **Nine drag zones** | Nine target zones, each bound to any folder; drop to archive under the current rules, with toast feedback |
+| ⏱ **Time rules** | Created (ctime) / modified (mtime) one-click switch · automatic year / month layers · "down to day" toggle · copy-only mode (originals untouched) |
+| 🗂 **Move with time structure** | Moves things whole, never taken apart: **instant rename on the same drive, and copying across drives does not rewrite creation time**. Checking it tucks away the two time buttons |
+| 📅 **That Day in History** | A unique look-back mode: browse old files by year (starts 8 years back), one-click "that day / that month" folders, flip through years freely |
+| 🔎 **Everything integration** | Auto-detects Everything.exe; when enabled, opens / locates results with Everything — whole-disk speed |
+| 🎨 **Zone personalization** | Per-zone color (color picker) with automatic dark text · rename zones · re-pick paths |
+| 🪟 **Window experience** | Position & size remembered · always-on-top toggle · **title bar never grays out** (`WM_NCACTIVATE` intercepted, the window stays "alive" during drops) · per-monitor DPI awareness |
+| ⚙️ **Engineering** | Moves / copies run on a background thread — zero UI freeze · config under `%APPDATA%` · PyInstaller single-file exe (UPX packed), download and run |
 
-Tests live in `test_keep_time.py` (21 assertions, including a reverse control proving `copy2` cannot preserve creation time).
+---
 
-## Building
+## 🥣 Usage
+
+### Direct download
+
+Grab `文件归档器.exe` (~11 MB, single file) from [Releases](../../releases) and run; config lives in `%APPDATA%\文件归档器\`.
+
+### Run from source
+
+```bash
+pip install tkinterdnd2
+python 文件归档器.py
+```
+
+### Build
 
 ```bash
 pyinstaller 文件归档器.spec
 ```
 
-The output is `dist/文件归档器.exe` (`build/`, `dist/`, and `__pycache__/` are not committed to the repo; they are reproducible).
+Output: `dist/文件归档器.exe`.
 
-## A note on this repository's history
+---
 
-This project was developed in Claude Code, but its session edit records could not be recovered (all local AI session logs were searched; no Edit/Write events point to this project). Therefore this repository was created **as an archive of the current state**, and the commit-by-commit history cannot be reconstructed. The development timeline inferred from file timestamps:
+## 🗂 Move with time structure
 
-| Time (2026) | Event |
-|---|---|
-| 06-29 | icon.ico icon created |
-| 07-04 23:37 | last run record in drop.log (drag-and-drop initialized normally) |
-| 07-05 00:27–00:29 | 文件归档器.py last modified → .spec updated → packaged as dist/文件归档器.exe |
+The「☑ 带时间结构移动」(Move with time structure) toggle in the bottom bar is the master switch for how things are transported. Off by default.
 
-In short: development spanned from late June 2026 to the early hours of 07-05, closing out with one complete packaging run.
+**The problem it solves**: the default path uses `shutil.move`. Same drive is fine, but **across drives it genuinely copies** — and copying resets a file's *creation time* to the current moment. `shutil.copy2` only preserves the modification time, not the creation time. So after moving a batch of old photos you would find their creation dates **all turned into today**.
+
+**What it does**:
+
+| Case | Method | Result |
+|---|---|---|
+| Same drive | `os.rename` — only the directory entry is renamed | **Instant**, regardless of file count; every timestamp preserved |
+| Across drives | Copy, then write the creation time back | Neither creation nor modification time changes |
+| Dragging a folder | The whole tree moves as one unit | Every file and subfolder keeps its creation time |
+
+The same-drive case is worth emphasising: a folder with 3000 files moves in **a few milliseconds**, because not a single byte of content is touched — only ownership of the name changes.
+
+**Checking it tucks away the「修改时间 / 创建时间」buttons** — those two select *which timestamp to sort by*; once this is on, structure is no longer split by time, so leaving them visible would only mislead. Unchecking restores them.
+
+Combined with 「仅复制」(copy only): the resulting copy keeps its creation time too (it is a copy, not a move, so the source stays).
+
+---
+
+## 🧠 Three details worth mentioning
+
+- **Title bar never grays out**: during long drops Windows marks the window "Not Responding" and grays its title bar. This tool subclasses the window procedure via `SetWindowLongPtr` and intercepts `WM_NCACTIVATE`, so the title bar always draws as active — no matter how much you drag.
+- **That Day in History**: anchored to each file's created / modified time, old files from different years go back to their own "that day / that month" folders. When revisiting photos, bills or chat backups from years ago, the timeline rewinds in one click.
+- **Creation-time fidelity**: `os.utime` can only change modification / access times, never creation time — that needs the Win32 `CreateFileW` + `SetFileTime`, and opening a *directory* handle requires `FILE_FLAG_BACKUP_SEMANTICS`. A directory's creation time must be written **after all its contents have settled** (writing into a directory refreshes its own timestamps), hence `os.walk(topdown=False)` to go depth-first.
+
+Tests live in `test_keep_time.py`: 21 assertions, including a reverse control proving `copy2` cannot preserve creation time.
+
+### A third, actually
+
+- **Creation-time fidelity**: `os.utime` can only change modification / access times, never creation time — that needs the Win32 `CreateFileW` + `SetFileTime`, and opening a *directory* handle requires `FILE_FLAG_BACKUP_SEMANTICS`. A directory's creation time must be written **after all its contents have settled** (writing into a directory refreshes its own timestamps), hence `os.walk(topdown=False)` to go depth-first.
+
+Tests live in `test_keep_time.py`: 21 assertions, including a reverse control proving `copy2` cannot preserve creation time.
+
+---
+
+## 📜 Notes
+
+- `dist/文件归档器.exe` and `build/` are committed on purpose as an anti-loss copy (since 2026-09-02); they are regenerable and safe to ignore
+- Runtime log: `drop.log` (startup / drop-init records)
