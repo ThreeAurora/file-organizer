@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import json
 import calendar
@@ -192,6 +193,208 @@ def copy_preserving_times(src, dst):
     else:
         shutil.copy2(src, dst)
         set_creation_time(dst, get_creation_time(src))
+
+
+# ============================================================
+# 「附带结构」的落点规则（移植自「视频移动」）
+#
+# 勾上「附带结构」后，不再按文件自身的时间归类，而是要求拖入的
+# 东西必须位于  年\月\日期层\  之下，落点 = 分区路径\年\月\日期层\原名。
+# 日期层两种写法都认，落库时统一成横杠格式：
+#     ...\2016\03\20160301\a.mp4   -> 分区\2016\03\2016-03-01\a.mp4
+#     ...\2016\03\2016-03-01\a.mp4 -> 分区\2016\03\2016-03-01\a.mp4
+# 结构不符整批拒绝，一个都不动。
+# ============================================================
+
+MAX_ITEMS = 200  # 单次拖入上限，防止把整棵目录树误拖进来
+
+
+def parse_day_folder(day):
+    """把日期层文件夹名解析成规范形式。
+
+    认得两种写法（都当成同一天）：
+        20231126   -> 年 2023，月 11，日 26
+        2023-11-26 -> 年 2023，月 11，日 26
+
+    返回 (ok, year, month, day_folder, reason)
+    day_folder 一律是横杠格式（2023-11-26）。
+    """
+    if len(day) == 8 and day.isdigit():
+        y, m, d = day[:4], day[4:6], day[6:8]
+    elif (len(day) == 10 and day[4] == "-" and day[7] == "-"
+          and day[:4].isdigit() and day[5:7].isdigit() and day[8:10].isdigit()):
+        y, m, d = day[:4], day[5:7], day[8:10]
+    else:
+        return False, "", "", day, "上级不是 年月日 文件夹"
+
+    if not ("01" <= m <= "12"):
+        return False, y, m, day, "日期里的月份不合法"
+    if not ("01" <= d <= "31"):
+        return False, y, m, day, "日期里的日子不合法"
+
+    return True, y, m, "{}-{}-{}".format(y, m, d), ""
+
+
+def validate_structure(src_path):
+    r"""检查路径是否符合 源库\年\月\日期层\东西 的结构。
+
+    要求拖入的东西必须位于【日期层之下】：
+        文件      ...\2017\06\20170613\xxx.mp4   -> 认
+        子文件夹  ...\2017\06\20170613\素材\      -> 认（整个搬走）
+        日期层本身 ...\2017\06\20170613           -> 拒（要求拖日期层里面的东西）
+
+    返回 (ok, year, month, day_folder, reason)
+    """
+    p = os.path.normpath(src_path)
+
+    # 文件/文件夹都取【父目录名】当日期层 —— 按规则它们都必须在日期层里面
+    day = os.path.basename(os.path.dirname(p))
+    parent = os.path.dirname(os.path.dirname(p))
+
+    month = os.path.basename(parent)
+    year = os.path.basename(os.path.dirname(parent))
+
+    ok, gy, gm, day_folder, reason = parse_day_folder(day)
+    if not ok:
+        return False, year, month, day, reason
+
+    # 年月两层必须规整，且与日期层对得上；不规整时以日期层反推的为准
+    year_ok = year.isdigit() and len(year) == 4
+    month_ok = month.isdigit() and len(month) == 2
+
+    if year_ok and month_ok:
+        if year != gy or month != gm:
+            return False, year, month, day, "年月日 与 年/月 对不上"
+        return True, year, month, day_folder, ""
+
+    return True, gy, gm, day_folder, ""
+
+
+def _already_in_tree(src, root):
+    """src 是不是已经在分区目录里了。在库里的再拖进来是「没活干」，
+    静默跳过，不能当成「结构不对」报错。"""
+    if not root:
+        return False
+    try:
+        s = os.path.normcase(os.path.abspath(src))
+        r = os.path.normcase(os.path.abspath(root))
+    except Exception:
+        return False
+    if s == r:
+        return True
+    return s.startswith(r.rstrip("\\") + "\\")
+
+
+def _is_inside(child, parent):
+    """child 是不是在 parent 里面（拦住「把目标塞进目标」）。"""
+    try:
+        c = os.path.normcase(os.path.abspath(child))
+        p = os.path.normcase(os.path.abspath(parent))
+    except Exception:
+        return False
+    if c == p:
+        return False
+    return c.startswith(p.rstrip("\\") + "\\")
+
+
+def _unique_dest(dest_dir, filename):
+    """防重名：名字 -> 名字_1 -> 名字_2 …已有 xxx_3 就从 _4 接着试。"""
+    base, ext = os.path.splitext(filename)
+    candidate = os.path.join(dest_dir, filename)
+    if not os.path.exists(candidate):
+        return candidate
+
+    m = re.match(r'^(.*)_(\d+)$', base)
+    start = 1
+    if m:
+        base = m.group(1)
+        start = int(m.group(2)) + 1
+
+    idx = start
+    while True:
+        candidate = os.path.join(dest_dir, f"{base}_{idx}{ext}")
+        if not os.path.exists(candidate):
+            return candidate
+        idx += 1
+
+
+def _move_structured(item_list, status_var, label, root_window, base_dir):
+    """「附带结构」主流程：先整批校验，一个不符就全拒；符合才搬。"""
+    global is_processing
+    tasks = []
+    errors = []
+    seen = set()
+
+    for p in item_list:
+        key = os.path.normcase(os.path.normpath(p))
+        if key in seen:
+            continue
+        seen.add(key)
+
+        if len(tasks) + len(errors) >= MAX_ITEMS:
+            errors.append(f"超过 {MAX_ITEMS} 项上限，后面的已忽略")
+            break
+
+        if not os.path.exists(p):
+            errors.append(f"{os.path.basename(p)} → 路径不存在")
+            continue
+
+        name = os.path.basename(os.path.normpath(p))
+
+        # 已在分区里的静默跳过，不算错。必须在结构校验之前：
+        # 库里的日期层是 2018-07-21 横杠格式，校验认不出来时不能误报
+        if _already_in_tree(p, base_dir):
+            continue
+
+        ok, year, month, day_folder, reason = validate_structure(p)
+        if not ok:
+            errors.append(f"{name} → {reason}")
+            continue
+        tasks.append((p, year, month, day_folder, name))
+
+    def _finish():
+        meta = zone_meta.get(label, {"color": label.cget("bg"), "text": "..."})
+        root_window.after(800, lambda: (
+            status_var.set(meta["text"]),
+            label.config(bg=meta["color"])))
+        is_processing = False
+
+    if errors:
+        text = "结构不符，未搬运：\n" + "\n".join(errors[:4])
+        if len(errors) > 4:
+            text += f"\n… 共 {len(errors)} 项不符"
+        root_window.after(0, lambda: _show_toast(label, text))
+        _finish()
+        return
+
+    total = len(tasks)
+    for i, (src, year, month, day_folder, name) in enumerate(tasks):
+        if i % 50 == 0 or i == total - 1:
+            percent = int(((i + 1) / total) * 100)
+            status_var.set(f"{percent}%\n{i+1}/{total}")
+
+        try:
+            dest_dir = os.path.join(base_dir, year, month, day_folder)
+            os.makedirs(dest_dir, exist_ok=True)
+            dest = _unique_dest(dest_dir, name)
+
+            if os.path.normcase(os.path.normpath(src)) == \
+                    os.path.normcase(os.path.normpath(dest)):
+                continue
+
+            if os.path.isdir(src) and not os.path.islink(src) \
+                    and _is_inside(dest, src):
+                raise RuntimeError("目标落在了源文件夹内部")
+
+            if use_copy:
+                copy_preserving_times(src, dest)
+            else:
+                move_preserving_times(src, dest)
+        except Exception as e:
+            print(f"Error moving {src}: {e}")
+
+    _finish()
+
 
 # ============================================================
 # 高 DPI 适配（4K 屏等）
@@ -550,7 +753,7 @@ _year_zone_idx = 0  # 那年今日绑定的文件夹索引
 _year_picked = 0  # 那年今日中最后操作过的年份
 use_everything = False  # 用 Everything 打开路径
 ev_path = DEFAULT_EV_PATH  # Everything.exe 路径
-use_keep_time = False  # 附带结构：整体搬运，创建/修改时间一个都不许动
+use_keep_time = False  # 附带结构：按源路径的 年\月\日期层 结构原样搬运
 
 # 弹窗单例引用（避免重复打开）
 _settings_win = None
@@ -596,6 +799,22 @@ def get_target_info(path, base_dir=None, override_ts=None):
 
 def move_worker(item_list, status_var, label, root_window, base_dir=None, override_ts=None):
     global is_processing
+
+    if use_keep_time:
+        # 「附带结构」：落点由源路径的 年\月\日期层 结构决定，不走时间归类
+        if not base_dir:
+            # 通用整理区没有固定根目录，结构无处可接
+            root_window.after(0, lambda: _show_toast(
+                label, "「附带结构」只对九宫格分区生效"))
+            meta = zone_meta.get(label, {"color": label.cget("bg"), "text": "..."})
+            root_window.after(800, lambda: (
+                status_var.set(meta["text"]),
+                label.config(bg=meta["color"])))
+            is_processing = False
+            return
+        _move_structured(item_list, status_var, label, root_window, base_dir)
+        return
+
     total = len(item_list)
     created_dirs = set()
 
@@ -920,11 +1139,14 @@ def toggle_everything():
 
 
 def toggle_keep_time():
-    """附带结构：整体搬运，创建/修改时间一个都不许动。
+    """附带结构：按源路径的 年\月\日期层 结构原样搬运。
 
-    开的时候把「修改时间 / 创建时间」两个按钮收起来 —— 这两个按钮是
-    「按哪个时间去归类」的选择器，勾上「附带结构」以后就不再按
-    时间去拆结构了，留着只会让人以为还能改。跟「那年今日」是同一套做法。
+    勾上后不再按文件自身的时间归类 —— 落点改成
+    分区\年\月\日期层\原名，日期层统一成 2017-06-13 横杠格式
+    （20170613 也认）。拖入的东西必须位于日期层之下，结构不符
+    整批拒绝。同盘瞬间改名，跨盘复制也会把创建时间写回去。
+    「修改时间 / 创建时间」两个按钮随之收起 —— 已经不按时间
+    归类了，这两个选择器留着只会让人以为还能改。
     """
     global use_keep_time
     if is_processing:
@@ -1359,20 +1581,21 @@ def show_help():
     R = tk.Frame(cols, bg="white")
     R.grid(row=1, column=1, sticky="new", padx=(8, 0))
     _add_card(R, "附带结构",
-              "☑ 附带结构 → 整体搬运，绝不拆开\n"
-              "拖动文件夹时，连同里面整个结构一起走，\n"
-              "而不是把里面的文件拆散挨个搬。\n"
+              "☑ 附带结构 → 按源路径的结构原样搬运\n"
+              "要求拖入的东西位于 年\\月\\日期层\\ 之下：\n"
+              "  拖入 G:\\库\\2016\\03\\20160301\\a.mp4\n"
+              "  落到 分区\\2016\\03\\2016-03-01\\a.mp4\n"
+              "日期层 20160301 / 2016-03-01 两种写法都认，\n"
+              "落库统一成横杠格式。拖文件夹时整棵树一起走。\n"
               "\n"
-              "同一块盘：只改个名字，瞬间完成，\n"
-              "再大的文件夹也一样快。\n"
-              "跨盘：真复制，但会手动把「创建时间」写回去，\n"
-              "—— 复制不会把创建时间洗成今天。\n"
+              "结构不符整批拒绝（Toast 说明原因），一个都不动；\n"
+              "已在分区里的再拖进来会静默跳过；\n"
+              "重名自动改成 _1、_2……绝不覆盖已有东西。\n"
               "\n"
-              "勾选后「修改时间 / 创建时间」两个按钮会收起：\n"
-              "这两个按钮是「按哪个时间去归类」的选择器，\n"
-              "开了它就不再按时间去拆结构了。\n"
-              "\n"
-              "配合「仅复制」使用 → 复制出来的副本同样保留创建时间").pack(fill="x", pady=(0, 8))
+              "同一块盘：只改个名字，瞬间完成；跨盘：真复制，\n"
+              "但会把「创建时间」写回去，不会洗成今天。\n"
+              "勾选后「修改时间 / 创建时间」两个按钮收起 ——\n"
+              "已经不按时间归类了。只对九宫格分区生效。").pack(fill="x", pady=(0, 8))
     _add_card(R, "题外话",
               "我有整理爱好，但文件数量达百万级，我无从下手\n"
               "所以它诞生了——简洁、极速\n"
@@ -1384,7 +1607,7 @@ def show_help():
               "第二排：修改·创建时间 / 置顶窗口 / Everything\n"
               "☑ 仅复制 → 复制文件（关闭后为移动文件）\n"
               "☑ 那年今日 → 见上方那年今日说明\n"
-              "☑ 附带结构 → 见上方说明（勾选后两个时间按钮会收起）\n"
+              "☑ 附带结构 → 见上方说明（按源路径结构搬运，勾选后两个时间按钮会收起）\n"
               "☑ 具体到日 → 例：开启后归档到 2026/07/2026-07-01\n"
               "    关闭则只到 2026/07\n"
               "☑ 置顶窗口 → 窗口始终在最前\n"
