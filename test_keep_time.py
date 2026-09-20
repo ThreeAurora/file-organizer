@@ -11,7 +11,7 @@ import sys
 import tempfile
 import time
 
-SRC_FILE = r"E:\文件整理脚本\文件归档器.py"
+SRC_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "文件归档器.py")
 
 # ---------------------------------------------------------------
 # 把目标模块里 ctypes 那段 + 搬运函数抠出来，在隔离命名空间里执行

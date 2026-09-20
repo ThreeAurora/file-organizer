@@ -3,7 +3,7 @@
 验证修复后能否自愈。从源码里抠出三个函数在隔离命名空间执行，避开 tkinter。"""
 import os, sys, json, tempfile, shutil, re
 
-SRC = r'E:\文件整理脚本\文件归档器.py'
+SRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), '文件归档器.py')
 
 src = open(SRC, encoding='utf-8', newline='').read()
 
