@@ -353,6 +353,10 @@ def _move_structured(item_list, status_var, label, root_window, base_dir):
         tasks.append((p, year, month, day_folder, name))
 
     def _finish():
+        # 嵌套函数不吃外层的 global 声明，必须自己再声明一次，
+        # 否则只改了局部变量，全局 is_processing 会卡在 True：
+        # 之后所有开关和拖拽都被「正在处理中」吞掉，直到重启
+        global is_processing
         meta = zone_meta.get(label, {"color": label.cget("bg"), "text": "..."})
         root_window.after(800, lambda: (
             status_var.set(meta["text"]),

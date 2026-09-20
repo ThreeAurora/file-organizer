@@ -189,6 +189,7 @@ check("5 不符整批拒·符合的也没动",
       not os.path.exists(os.path.join(zone2, "2018", "05", "2018-05-01", "c.mp4")))
 check("5 拒绝时弹了说明", len(ns["toasts"]) == 1 and "结构不符" in ns["toasts"][0],
       str(ns.get("toasts")))
+check("5 拒绝后 is_processing 复位", ns.get("is_processing") is False)
 
 # 已在库里 -> 静默跳过，不算错
 ns["toasts"] = []
@@ -201,6 +202,7 @@ _move_structured([f4], ns["status_var"], ns["label"], ns["root_window"], zone2)
 check("5 重名落成_1",
       os.path.isfile(os.path.join(zone2, "2016", "03", "2016-03-01", "a_1.mp4")),
       str(os.listdir(os.path.join(zone2, "2016", "03", "2016-03-01"))))
+check("5 搬运后 is_processing 复位", ns.get("is_processing") is False)
 
 shutil.rmtree(ws, ignore_errors=True)
 
