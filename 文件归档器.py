@@ -7,10 +7,10 @@ import ctypes
 import subprocess
 import threading
 import time
+import queue
 import shutil
 import tkinter as tk
 from ctypes import wintypes
-from tkinterdnd2 import DND_FILES, TkinterDnD
 from tkinter import messagebox, filedialog, colorchooser, simpledialog
 
 
@@ -434,6 +434,7 @@ def keep_titlebar_active(hwnd):
         user32 = ctypes.windll.user32
         GWLP_WNDPROC = -4
         WM_NCACTIVATE = 0x0086
+        WM_DROPFILES = 0x0233
 
         WNDPROC_T = ctypes.WINFUNCTYPE(
             ctypes.c_longlong, ctypes.c_void_p, ctypes.c_uint,
@@ -449,6 +450,12 @@ def keep_titlebar_active(hwnd):
         def new_wndproc(h, msg, wp, lp):
             if msg == WM_NCACTIVATE:
                 wp = 1
+            elif msg == WM_DROPFILES:
+                try:
+                    _handle_wm_dropfiles(h, wp)
+                except Exception:
+                    pass
+                return 0
             return user32.CallWindowProcW(old_proc, h, msg, wp, lp)
 
         callback = WNDPROC_T(new_wndproc)
@@ -459,6 +466,85 @@ def keep_titlebar_active(hwnd):
         _titlebar_hooks[hwnd] = old_proc
     except:
         pass
+
+# ============================================================
+# 原生 WM_DROPFILES 拖放接收
+#
+# 以前走 tkinterdnd2（TkDND）的 OLE 通道，它在 Tcl 层用固定
+# 缓冲区接文件列表：文件名超过 260 字符（如网页另存的超长标题）
+# 会缓冲区溢出闪退，一次拖几千个文件也会闪退。
+# 改成 Explorer 的老式 WM_DROPFILES 通道：DragQueryFileW 逐条
+# 按名字实际长度分配缓冲，Unicode 与数量都没有上限。
+#
+# 注意：窗口钩子回调跑在 Tk 事件循环「释放了 GIL」的窗口期里，
+# 在钩子里调用任何 Tcl/Tk（after_idle、winfo_*、widget 操作等）
+# 都会破坏 Tk 的线程状态，事件循环回来时 PyEval_RestoreThread
+# 直接致命错误、整个进程闪退（2026-09-20 修）。
+# 所以钩子里只做 ctypes 解析 + 纯 Python 入队，分发交给正常
+# Tk 上下文里的队列泵。
+# ============================================================
+
+_native_drop_targets = []  # (widget, handler)，按注册顺序自下而上匹配
+_native_drop_queue = queue.Queue()
+
+def register_native_drop(widget, handler):
+    _native_drop_targets.append((widget, handler))
+
+def _handle_wm_dropfiles(hwnd, hdrop):
+    """窗口钩子内调用：只读数据，不碰 Tcl/Tk"""
+    shell32 = ctypes.windll.shell32
+    shell32.DragQueryFileW.argtypes = [
+        wintypes.HANDLE, wintypes.UINT, wintypes.LPWSTR, wintypes.UINT]
+    shell32.DragQueryFileW.restype = wintypes.UINT
+    shell32.DragQueryPoint.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.POINT)]
+    shell32.DragFinish.argtypes = [wintypes.HANDLE]
+
+    count = shell32.DragQueryFileW(hdrop, 0xFFFFFFFF, None, 0)
+    paths = []
+    for i in range(count):
+        n = shell32.DragQueryFileW(hdrop, i, None, 0)
+        if n <= 0:
+            continue
+        buf = ctypes.create_unicode_buffer(n + 1)
+        shell32.DragQueryFileW(hdrop, i, buf, n + 1)
+        paths.append(buf.value)
+    pt = wintypes.POINT()
+    shell32.DragQueryPoint(hdrop, ctypes.byref(pt))
+    shell32.DragFinish(hdrop)  # 系统分配的 HDROP 内存必须归还
+    ctypes.windll.user32.ClientToScreen(
+        ctypes.c_void_p(hwnd), ctypes.byref(pt))
+    if paths:
+        _native_drop_queue.put((pt.x, pt.y, paths))
+
+_pump_after_id = None
+
+def _dispatch_native_drop(x, y, paths):
+    try:
+        w = root.winfo_containing(x, y)
+        while w is not None:
+            for target, hnd in _native_drop_targets:
+                if w is target:
+                    hnd(paths)
+                    return
+            w = getattr(w, 'master', None)
+    except Exception:
+        pass
+
+def _pump_native_drops():
+    """正常 Tk 上下文里消费钩子收到的拖放"""
+    global _pump_after_id
+    try:
+        while True:
+            x, y, paths = _native_drop_queue.get_nowait()
+            _dispatch_native_drop(x, y, paths)
+    except queue.Empty:
+        pass
+    except tk.TclError:
+        return
+    try:
+        _pump_after_id = root.after(50, _pump_native_drops)
+    except tk.TclError:
+        pass  # 窗口已销毁，不再续拍
 
 # ============================================================
 # 配置区
@@ -650,6 +736,13 @@ def on_configure(event):
 
 def on_close():
     """退出前保存窗口状态"""
+    global _pump_after_id
+    if _pump_after_id:
+        try:
+            root.after_cancel(_pump_after_id)
+        except Exception:
+            pass
+        _pump_after_id = None
     save_window_state()
     save_all()
     root.destroy()
@@ -1650,10 +1743,7 @@ def show_help():
 # 启动
 # ============================================================
 
-try:
-    root = TkinterDnD.Tk()
-except:
-    root = tk.Tk()
+root = tk.Tk()
 
 root.title("文件归档器")
 root.attributes("-topmost", True)
@@ -1693,6 +1783,8 @@ keep_titlebar_active(root_hwnd)
 ctypes.windll.shell32.DragAcceptFiles(root_hwnd, True)
 ex = ctypes.windll.user32.GetWindowLongPtrW(root_hwnd, -20)
 ctypes.windll.user32.SetWindowLongPtrW(root_hwnd, -20, ex | 0x10)
+# 启动队列泵：钩子只入队，Tk 侧在这里取件分发
+root.after(50, _pump_native_drops)
 
 # ---- 主网格容器 ----
 main = tk.Frame(root, bg=WINDOW_BG)
@@ -1717,8 +1809,7 @@ for idx, cfg in enumerate(ZONE_CONFIGS):
 
     handler = make_zone_handler(idx, sv, lbl, cfg["name"])
     for w in (lbl, frame):
-        w.drop_target_register(DND_FILES)
-        w.dnd_bind('<<Drop>>', handler)
+        register_native_drop(w, handler)
 
     def mk_enter(l=lbl, f=frame, c=cfg):
         def fn(e):
@@ -1768,8 +1859,7 @@ gen_lbl.pack(fill="both", expand=True)
 
 gen_handler = make_general_handler(gen_sv, gen_lbl)
 for w in (gen_lbl, gen_frame):
-    w.drop_target_register(DND_FILES)
-    w.dnd_bind('<<Drop>>', gen_handler)
+    register_native_drop(w, gen_handler)
 
 # 通用整理右键：配置颜色
 def save_gen_color():
@@ -2021,4 +2111,5 @@ if use_keep_time:
     keep_btn.config(text="☑ 附带结构")
     _update_time_buttons_visible()
 
-root.mainloop()
+if __name__ == "__main__":
+    root.mainloop()
