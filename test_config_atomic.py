@@ -116,11 +116,16 @@ s = load_settings()
 check('无配置时 keep_time_default 为真', s.get('keep_time_default') is True,
       f'got={s.get("keep_time_default")}')
 check('无配置时记录值 use_keep_time 为假', s.get('use_keep_time') is False)
+check('无配置时 keep_time_fallback 为真',
+      s.get('keep_time_fallback') is True,
+      f'got={s.get("keep_time_fallback")}')
 
 # 升级上来的老配置：settings 里没有这个键
 ns['_atomic_write_json'](CFG, {'settings': {'use_copy': False}})
 s = load_settings()
 check('老配置缺键时仍默认开启', s.get('keep_time_default') is True)
+check('老配置缺键时混合模式仍默认为真',
+      s.get('keep_time_fallback') is True)
 
 # 用户显式关掉默认开启
 ns['_atomic_write_json'](CFG, {'settings': {'keep_time_default': False,
@@ -128,6 +133,15 @@ ns['_atomic_write_json'](CFG, {'settings': {'keep_time_default': False,
 s = load_settings()
 check('显式关掉后读到 False', s.get('keep_time_default') is False)
 check('关掉后 use_keep_time 仍按记录值读出', s.get('use_keep_time') is True)
+
+# 用户显式关掉混合模式
+ns['_atomic_write_json'](CFG, {'settings': {'keep_time_default': True,
+                                            'keep_time_fallback': False}})
+s = load_settings()
+check('显式关掉混合模式后读到 False',
+      s.get('keep_time_fallback') is False)
+check('关掉混合模式不影响默认开启读值',
+      s.get('keep_time_default') is True)
 
 print('\n' + '='*62)
 print(f'通过 {passed} 项，失败 {failed} 项')

@@ -400,6 +400,114 @@ def _move_structured(item_list, status_var, label, root_window, base_dir):
     _finish()
 
 
+def _move_mixed(item_list, status_var, label, root_window, base_dir, override_ts=None):
+    r"""混合模式：符合 年\月\日期层\ 结构的走结构落点，其余按时间归类。
+
+    与纯「附带结构」的区别在于每项各走各的，不再整批拒绝：结构那边
+    照旧「已在分区里的静默跳过、重名 _1/_2 递增、绝不覆盖」，时间那边
+    按当前的「修改时间 / 创建时间」与「具体到日」归类；两边都用保创建
+    时间的搬运，不开「仅复制」时是整体搬走。
+    """
+    global is_processing
+    tasks = []   # 结构项：(src, year, month, day_folder, name)
+    timed = []   # 时间项：src
+    errors = []  # 压根没搬的（路径不存在 / 超过上限）
+    seen = set()
+
+    for p in item_list:
+        key = os.path.normcase(os.path.normpath(p))
+        if key in seen:
+            continue
+        seen.add(key)
+
+        if len(tasks) + len(timed) + len(errors) >= MAX_ITEMS:
+            errors.append(f"超过 {MAX_ITEMS} 项上限，后面的已忽略")
+            break
+
+        if not os.path.exists(p):
+            errors.append(f"{os.path.basename(p)} → 路径不存在")
+            continue
+
+        # 已在分区里的静默跳过，不算错。必须在结构校验之前：库里的日期层
+        # 是 2018-07-21 横杠格式，校验认不出来时不能误当时间项再搬一次
+        if _already_in_tree(p, base_dir):
+            continue
+
+        ok, year, month, day_folder, _reason = validate_structure(p)
+        if ok:
+            tasks.append((p, year, month, day_folder,
+                          os.path.basename(os.path.normpath(p))))
+        else:
+            timed.append(p)
+
+    total = len(tasks) + len(timed)
+    done = 0
+
+    for src, year, month, day_folder, name in tasks:
+        done += 1
+        if done % 50 == 0 or done == total:
+            status_var.set(f"{int(done / total * 100)}%\n{done}/{total}")
+        try:
+            dest_dir = os.path.join(base_dir, year, month, day_folder)
+            os.makedirs(dest_dir, exist_ok=True)
+            dest = _unique_dest(dest_dir, name)
+
+            if os.path.normcase(os.path.normpath(src)) == \
+                    os.path.normcase(os.path.normpath(dest)):
+                continue
+
+            if os.path.isdir(src) and not os.path.islink(src) \
+                    and _is_inside(dest, src):
+                raise RuntimeError("目标落在了源文件夹内部")
+
+            if use_copy:
+                copy_preserving_times(src, dest)
+            else:
+                move_preserving_times(src, dest)
+        except Exception as e:
+            print(f"Error moving {src}: {e}")
+
+    for src in timed:
+        done += 1
+        if done % 50 == 0 or done == total:
+            status_var.set(f"{int(done / total * 100)}%\n{done}/{total}")
+        try:
+            target_dir, name = get_target_info(src, base_dir, override_ts)
+            if not target_dir:
+                continue
+            os.makedirs(target_dir, exist_ok=True)
+            dest = _unique_dest(target_dir, name)
+
+            if os.path.normcase(os.path.normpath(src)) == \
+                    os.path.normcase(os.path.normpath(dest)):
+                continue
+
+            if os.path.isdir(src) and not os.path.islink(src) \
+                    and _is_inside(dest, src):
+                raise RuntimeError("目标落在了源文件夹内部")
+
+            if use_copy:
+                copy_preserving_times(src, dest)
+            else:
+                move_preserving_times(src, dest)
+        except Exception as e:
+            print(f"Error moving {src}: {e}")
+
+    # 成功时不弹任何提示（与「附带结构」纯模式一致）：分流了几项是
+    # 实现细节，不是要用户决策的事；只有真没搬动的才报
+    if errors:
+        text = "未搬运：\n" + "\n".join(errors[:4])
+        if len(errors) > 4:
+            text += f"\n… 共 {len(errors)} 项"
+        root_window.after(0, lambda: _show_toast(label, text))
+
+    meta = zone_meta.get(label, {"color": label.cget("bg"), "text": "..."})
+    root_window.after(800, lambda: (
+        status_var.set(meta["text"]),
+        label.config(bg=meta["color"])))
+    is_processing = False
+
+
 # ============================================================
 # 高 DPI 适配（4K 屏等）
 # ============================================================
@@ -659,11 +767,13 @@ def load_settings():
             'ev_path': s.get('ev_path', DEFAULT_EV_PATH),
             'use_keep_time': s.get('use_keep_time', False),
             'keep_time_default': s.get('keep_time_default', True),
+            'keep_time_fallback': s.get('keep_time_fallback', True),
         }
     return {'use_copy': False, 'use_day': True, 'use_ctime': False,
             'is_topmost': True, 'use_year_mode': False,
             'use_everything': False, 'ev_path': DEFAULT_EV_PATH,
-            'use_keep_time': False, 'keep_time_default': True}
+            'use_keep_time': False, 'keep_time_default': True,
+            'keep_time_fallback': True}
 
 
 def save_all():
@@ -691,6 +801,7 @@ def save_all():
             'ev_path': ev_path,
             'use_keep_time': use_keep_time,
             'keep_time_default': keep_time_default,
+            'keep_time_fallback': keep_time_fallback,
         }
         _atomic_write_json(CONFIG_PATH, data)
         return True
@@ -854,6 +965,7 @@ use_everything = False  # 用 Everything 打开路径
 ev_path = DEFAULT_EV_PATH  # Everything.exe 路径
 use_keep_time = False  # 附带结构：按源路径的 年\月\日期层 结构原样搬运
 keep_time_default = True  # 启动时默认开启「附带结构」（设置窗口可关，关了改记上次状态）
+keep_time_fallback = True  # 混合模式：结构不符的项按时间归类，不整批拒收
 
 # 弹窗单例引用（避免重复打开）
 _settings_win = None
@@ -900,20 +1012,17 @@ def get_target_info(path, base_dir=None, override_ts=None):
 def move_worker(item_list, status_var, label, root_window, base_dir=None, override_ts=None):
     global is_processing
 
-    if use_keep_time:
-        # 「附带结构」：落点由源路径的 年\月\日期层 结构决定，不走时间归类
-        if not base_dir:
-            # 通用整理区没有固定根目录，结构无处可接
-            root_window.after(0, lambda: _show_toast(
-                label, "「附带结构」只对九宫格分区生效"))
-            meta = zone_meta.get(label, {"color": label.cget("bg"), "text": "..."})
-            root_window.after(800, lambda: (
-                status_var.set(meta["text"]),
-                label.config(bg=meta["color"])))
-            is_processing = False
-            return
-        _move_structured(item_list, status_var, label, root_window, base_dir)
+    if use_keep_time and base_dir:
+        # 「附带结构」：落点由源路径的 年\月\日期层 结构决定
+        if keep_time_fallback:
+            # 混合模式：结构不符的项转按时间归类，各走各的
+            _move_mixed(item_list, status_var, label, root_window, base_dir,
+                        override_ts)
+        else:
+            _move_structured(item_list, status_var, label, root_window, base_dir)
         return
+    # 通用整理区没有固定根目录，结构无处可接 —— 勾着「附带结构」也按时间
+    # 归类（落到文件自己旁边），不再拒收
 
     total = len(item_list)
     created_dirs = set()
@@ -1258,8 +1367,12 @@ def toggle_keep_time():
 
 
 def _update_time_buttons_visible():
-    """按 use_keep_time 显示/隐藏两个时间模式按钮。"""
-    if use_keep_time:
+    """按 use_keep_time / keep_time_fallback 显示或隐藏两个时间模式按钮。
+
+    纯「附带结构」时不按时间归类，两个选择器留着只会让人以为还能改，
+    所以收起；混合模式下时间那侧还要用，正常显示。
+    """
+    if use_keep_time and not keep_time_fallback:
         time_mod_frame.pack_forget()
         time_create_frame.pack_forget()
     else:
@@ -1467,14 +1580,17 @@ def reselect_path(cfg_dict, sv_var, lbl_widget):
 # ============================================================
 
 def open_settings():
-    """设置窗口（九宫格各自右键改，不做批量）。目前只有「附带结构」启动默认一项。"""
+    """设置窗口（九宫格各自右键改，不做批量）。
+
+    两项：启动时是否默认开启「附带结构」；结构不符的项是否转按时间
+    归类（混合模式）。都随保存落盘，混合模式当场生效。"""
     global _settings_win
     if _settings_win and _settings_win.winfo_exists():
         _settings_win.lift()
         _settings_win.focus_force()
         return
 
-    _SET_W, _SET_H = 460, 200
+    _SET_W, _SET_H = 460, 300
     _settings_win = tk.Toplevel(root)
     settings_win = _settings_win
     settings_win.title("设置")
@@ -1505,7 +1621,7 @@ def open_settings():
     body = tk.Frame(settings_win, bg="#f8fafc")
     body.pack(fill="both", expand=True, padx=14, pady=(12, 0))
 
-    kt_default_var = tk.BooleanVar(value=keep_time_default)
+    kt_default_var = tk.BooleanVar(master=settings_win, value=keep_time_default)
     tk.Checkbutton(body, text="启动时默认开启「附带结构」", variable=kt_default_var,
                    bg="#f8fafc", fg=TEXT_MAIN, activebackground="#f8fafc",
                    activeforeground=TEXT_MAIN, selectcolor="white", bd=0,
@@ -1514,16 +1630,34 @@ def open_settings():
     tk.Label(body, text="勾选：每次启动都自动打开「附带结构」\n"
                         "取消：记住底栏开关的上次状态",
              bg="#f8fafc", fg=TEXT_MUTED, font=("Microsoft YaHei", 9),
-             justify="left", anchor="w").pack(anchor="w", padx=(22, 0), pady=(4, 0))
+             justify="left", anchor="w",
+             wraplength=400).pack(anchor="w", padx=(22, 0), pady=(4, 0))
+
+    kt_fallback_var = tk.BooleanVar(master=settings_win, value=keep_time_fallback)
+    tk.Checkbutton(body, text="结构不符时按时间归类", variable=kt_fallback_var,
+                   bg="#f8fafc", fg=TEXT_MAIN, activebackground="#f8fafc",
+                   activeforeground=TEXT_MAIN, selectcolor="white", bd=0,
+                   highlightthickness=0, font=("Microsoft YaHei", 10),
+                   cursor="hand2").pack(anchor="w", pady=(12, 0))
+    tk.Label(body, text="勾选：符合 年\\月\\日期层 的按结构搬，其余按「修改时间 /\n"
+                        "创建时间」归类，两个时间按钮不再收起\n"
+                        "取消：结构不符的整批拒收，一个都不动",
+             bg="#f8fafc", fg=TEXT_MUTED, font=("Microsoft YaHei", 9),
+             justify="left", anchor="w",
+             wraplength=400).pack(anchor="w", padx=(22, 0), pady=(4, 0))
 
     btn_row = tk.Frame(settings_win, bg="#f8fafc")
     btn_row.pack(side="bottom", fill="x", padx=12, pady=12)
 
     def do_save():
-        global keep_time_default
+        global keep_time_default, keep_time_fallback
         keep_time_default = bool(kt_default_var.get())
+        keep_time_fallback = bool(kt_fallback_var.get())
         if save_all():
-            messagebox.showinfo("已保存", "已保存，重启后生效。", parent=settings_win)
+            # 混合模式当场生效；「启动时默认开启」要下次启动才起作用
+            _update_time_buttons_visible()
+            messagebox.showinfo("已保存", "已保存。（「启动时默认开启」下次启动生效）",
+                                parent=settings_win)
             on_destroy()
 
     tk.Button(btn_row, text="取消", bg="#e2e8f0", fg=TEXT_MAIN,
@@ -1623,14 +1757,16 @@ def show_help():
               "日期层 20160301 / 2016-03-01 两种写法都认，\n"
               "落库统一成横杠格式。拖文件夹时整棵树一起走。\n"
               "\n"
-              "结构不符整批拒绝（Toast 说明原因），一个都不动；\n"
+              "结构不符：混合模式（设置可关，默认开）转按「修改时间 /\n"
+              "创建时间」归类；关掉则整批拒绝（Toast 说明原因），一个都不动；\n"
               "已在分区里的再拖进来会静默跳过；\n"
               "重名自动改成 _1、_2……绝不覆盖已有东西。\n"
               "\n"
               "同一块盘：只改个名字，瞬间完成；跨盘：真复制，\n"
               "但会把「创建时间」写回去，不会洗成今天。\n"
-              "勾选后「修改时间 / 创建时间」两个按钮收起 ——\n"
-              "已经不按时间归类了。只对九宫格分区生效。").pack(fill="x", pady=(0, 8))
+              "混合模式下两个时间按钮照常显示，关掉混合模式\n"
+              "（纯结构搬运）后收起；「通用整理」区一律按时间归类。").pack(
+                  fill="x", pady=(0, 8))
     _add_card(R, "题外话",
               "我有整理爱好，但文件数量达百万级，我无从下手\n"
               "所以它诞生了——简洁、极速\n"
@@ -1642,14 +1778,15 @@ def show_help():
               "第二排：修改时间·创建时间 / Everything / ⚙ 设置 / ℹ 使用手册\n"
               "☑ 仅复制 → 复制文件（关闭后为移动文件）\n"
               "☑ 那年今日 → 见上方那年今日说明\n"
-              "☑ 附带结构 → 见上方说明（按源路径结构搬运，勾选后两个时间按钮会收起）\n"
+              "☑ 附带结构 → 见上方说明（纯结构模式下两个时间按钮会收起）\n"
               "☑ 具体到日 → 例：开启后归档到 2026/07/2026-07-01\n"
               "    关闭则只到 2026/07\n"
               "☑ 置顶窗口 → 窗口始终在最前\n"
               "☑ Everything → 点击格子后在 Everything 中搜索路径\n"
               "    （点「选择路径」或「自动查找」配置 Everything）\n"
-              "⚙ 设置 → 启动时是否默认开启「附带结构」\n"
-              "    （取消勾选则记住底栏开关的上次状态）").grid(
+              "⚙ 设置 → 启动时是否默认开启「附带结构」（取消则记住底栏\n"
+              "    开关的上次状态）；结构不符是否按时间归类（混合模式，\n"
+              "    默认开；取消则整批拒收，一个都不动）").grid(
                   row=2, column=0, columnspan=2, sticky="ew", pady=(0, 0))
 
     tk.Button(hw, text="知道了", bg="#3b82f6", fg="white",
@@ -2057,6 +2194,7 @@ ev_path = _settings.get('ev_path', '')
 keep_time_default = _settings.get('keep_time_default', True)
 # 默认开启时每次启动都勾上；关掉这个默认后，改记底栏开关的上次状态
 use_keep_time = True if keep_time_default else _settings.get('use_keep_time', False)
+keep_time_fallback = _settings.get('keep_time_fallback', True)
 if use_keep_time:
     keep_btn.config(text="☑ 附带结构")
     _update_time_buttons_visible()
