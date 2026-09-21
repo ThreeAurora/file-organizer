@@ -658,11 +658,12 @@ def load_settings():
             'use_everything': s.get('use_everything', False),
             'ev_path': s.get('ev_path', DEFAULT_EV_PATH),
             'use_keep_time': s.get('use_keep_time', False),
+            'keep_time_default': s.get('keep_time_default', True),
         }
     return {'use_copy': False, 'use_day': True, 'use_ctime': False,
             'is_topmost': True, 'use_year_mode': False,
             'use_everything': False, 'ev_path': DEFAULT_EV_PATH,
-            'use_keep_time': False}
+            'use_keep_time': False, 'keep_time_default': True}
 
 
 def save_all():
@@ -689,6 +690,7 @@ def save_all():
             'use_everything': use_everything,
             'ev_path': ev_path,
             'use_keep_time': use_keep_time,
+            'keep_time_default': keep_time_default,
         }
         _atomic_write_json(CONFIG_PATH, data)
         return True
@@ -851,6 +853,7 @@ _year_picked = 0  # 那年今日中最后操作过的年份
 use_everything = False  # 用 Everything 打开路径
 ev_path = DEFAULT_EV_PATH  # Everything.exe 路径
 use_keep_time = False  # 附带结构：按源路径的 年\月\日期层 结构原样搬运
+keep_time_default = True  # 启动时默认开启「附带结构」（设置窗口可关，关了改记上次状态）
 
 # 弹窗单例引用（避免重复打开）
 _settings_win = None
@@ -1464,16 +1467,18 @@ def reselect_path(cfg_dict, sv_var, lbl_widget):
 # ============================================================
 
 def open_settings():
+    """设置窗口（九宫格各自右键改，不做批量）。目前只有「附带结构」启动默认一项。"""
     global _settings_win
     if _settings_win and _settings_win.winfo_exists():
         _settings_win.lift()
         _settings_win.focus_force()
         return
 
+    _SET_W, _SET_H = 460, 200
     _settings_win = tk.Toplevel(root)
     settings_win = _settings_win
-    settings_win.title("设置 - 目标文件夹")
-    settings_win.geometry("580x490")
+    settings_win.title("设置")
+    settings_win.geometry(f"{_SET_W}x{_SET_H}")
     settings_win.resizable(False, False)
     settings_win.configure(bg="#f8fafc")
     settings_win.transient(root)
@@ -1487,115 +1492,48 @@ def open_settings():
 
     settings_win.update()
     keep_titlebar_active(_get_top_hwnd(settings_win))
-    x = root.winfo_x() + (root.winfo_width() - 580) // 2
-    y = root.winfo_y() + (root.winfo_height() - 490) // 2
+    x = root.winfo_x() + (root.winfo_width() - _SET_W) // 2
+    y = root.winfo_y() + (root.winfo_height() - _SET_H) // 2
     settings_win.geometry(f"+{x}+{y}")
 
     header = tk.Frame(settings_win, bg=WINDOW_BG, height=40)
     header.pack(fill="x", side="top")
     header.pack_propagate(False)
-    tk.Label(header, text="设置目标文件夹", bg=WINDOW_BG, fg="#000000",
+    tk.Label(header, text="设置", bg=WINDOW_BG, fg="#000000",
              font=("Microsoft YaHei", 11, "bold")).pack(side="left", padx=12, pady=6)
 
-    cols = tk.Frame(settings_win, bg="#f8fafc")
-    cols.pack(fill="x", padx=12, pady=(10, 2))
-    tk.Label(cols, text="颜色", bg="#f8fafc", fg=TEXT_MAIN,
-             font=("Microsoft YaHei", 8), width=3, anchor="w").pack(side="left", padx=(0, 6))
-    tk.Label(cols, text="名称", bg="#f8fafc", fg=TEXT_MAIN,
-             font=("Microsoft YaHei", 8), width=12, anchor="w").pack(side="left", padx=(0, 6))
-    tk.Label(cols, text="路径", bg="#f8fafc", fg=TEXT_MAIN,
-             font=("Microsoft YaHei", 8), width=30, anchor="w").pack(side="left", padx=(0, 6))
-    tk.Label(cols, text="选择路径", bg="#f8fafc", fg=TEXT_MAIN,
-             font=("Microsoft YaHei", 8)).pack(side="left")
+    body = tk.Frame(settings_win, bg="#f8fafc")
+    body.pack(fill="both", expand=True, padx=14, pady=(12, 0))
 
-    entries = []
-    for i, zone in enumerate(ZONE_CONFIGS):
-        row = tk.Frame(settings_win, bg="#f8fafc")
-        row.pack(fill="x", padx=12, pady=3)
-
-        current_color = tk.StringVar(value=zone["color"])
-
-        color_btn = tk.Button(row, text="", bg=zone["color"], width=3,
-                              relief="flat", cursor="hand2", bd=0,
-                              activebackground=zone["color"])
-        color_btn.pack(side="left", padx=(0, 6))
-
-        def make_pick_cb(cv, cb):
-            def pick():
-                result = colorchooser.askcolor(color=cv.get(), title="选择颜色")
-                if result[1]:
-                    cv.set(result[1])
-                    cb.config(bg=result[1])
-            return pick
-        color_btn.config(command=make_pick_cb(current_color, color_btn))
-
-        name_var = tk.StringVar(value=zone["name"])
-        name_entry = tk.Entry(row, textvariable=name_var, width=12,
-                              font=("Microsoft YaHei", 9),
-                              bg="white", fg=TEXT_MAIN, insertbackground=TEXT_MAIN,
-                              relief="flat", bd=0, highlightbackground="#cbd5e1",
-                              highlightthickness=1)
-        name_entry.pack(side="left", padx=(0, 6))
-
-        path_var = tk.StringVar(value=zone["path"])
-        path_entry = tk.Entry(row, textvariable=path_var, width=30,
-                              font=("Microsoft YaHei", 9),
-                              bg="white", fg=TEXT_MAIN, insertbackground=TEXT_MAIN,
-                              relief="flat", bd=0, highlightbackground="#cbd5e1",
-                              highlightthickness=1)
-        path_entry.pack(side="left", padx=(0, 4))
-
-        def browse(pe=path_entry, nv=name_var):
-            d = filedialog.askdirectory(title="选择目标文件夹")
-            if d:
-                pe.delete(0, "end")
-                pe.insert(0, d.replace("\\", "/") + "/")
-                nv.delete(0, "end")
-                nv.insert(0, os.path.basename(d))
-
-        browse_btn = tk.Button(row, text="…", bg="#e2e8f0", fg=TEXT_MAIN,
-                               font=("Microsoft YaHei", 9), relief="flat",
-                               cursor="hand2", bd=0, padx=6,
-                               activebackground="#cbd5e1", activeforeground=TEXT_MAIN,
-                               command=browse)
-        browse_btn.pack(side="left")
-
-        entries.append((name_var, path_var, current_color))
+    kt_default_var = tk.BooleanVar(value=keep_time_default)
+    tk.Checkbutton(body, text="启动时默认开启「附带结构」", variable=kt_default_var,
+                   bg="#f8fafc", fg=TEXT_MAIN, activebackground="#f8fafc",
+                   activeforeground=TEXT_MAIN, selectcolor="white", bd=0,
+                   highlightthickness=0, font=("Microsoft YaHei", 10),
+                   cursor="hand2").pack(anchor="w")
+    tk.Label(body, text="勾选：每次启动都自动打开「附带结构」\n"
+                        "取消：记住底栏开关的上次状态",
+             bg="#f8fafc", fg=TEXT_MUTED, font=("Microsoft YaHei", 9),
+             justify="left", anchor="w").pack(anchor="w", padx=(22, 0), pady=(4, 0))
 
     btn_row = tk.Frame(settings_win, bg="#f8fafc")
     btn_row.pack(side="bottom", fill="x", padx=12, pady=12)
 
     def do_save():
-        new_zones = []
-        for i, (nv, pv, cv) in enumerate(entries):
-            name = nv.get().strip()
-            path = pv.get().strip()
-            color = cv.get().strip()
-            if not name or not path:
-                messagebox.showwarning("未填完整", f"第 {i+1} 项名称或路径为空，请补全。",
-                                       parent=settings_win)
-                return
-            new_zones.append({"name": name, "path": path, "color": color})
-
+        global keep_time_default
+        keep_time_default = bool(kt_default_var.get())
         if save_all():
-            # 更新内存配置
-            ZONE_CONFIGS[:] = new_zones
-            # 即时刷新界面上的区域名称（zone_widgets 存的是 index，查 ZONE_CONFIGS）
-            for zid, sv_var, lbl_w in zone_widgets:
-                cg = ZONE_CONFIGS[zid]
-                sv_var.set(cg["name"] if cg["path"] else "请选择路径")
-                zone_meta[lbl_w] = {"color": cg["color"], "text": cg["name"]}
-            messagebox.showinfo("已保存", "配置已保存。", parent=settings_win)
+            messagebox.showinfo("已保存", "已保存，重启后生效。", parent=settings_win)
             on_destroy()
 
     tk.Button(btn_row, text="取消", bg="#e2e8f0", fg=TEXT_MAIN,
               font=("Microsoft YaHei", 9), relief="flat", cursor="hand2",
               activebackground="#cbd5e1", activeforeground=TEXT_MAIN,
-              command=on_destroy, padx=20, ipady=2).pack(side="right", padx=(8, 0))
+              command=on_destroy, padx=20).pack(side="right", padx=(8, 0), ipady=3)
     tk.Button(btn_row, text="保存", bg="#3b82f6", fg="white",
               font=("Microsoft YaHei", 9), relief="flat", cursor="hand2",
               activebackground="#2563eb", activeforeground="white",
-              command=do_save, padx=20, ipady=2).pack(side="right")
+              command=do_save, padx=20).pack(side="right", ipady=3)
 
 
 # ============================================================
@@ -1678,7 +1616,7 @@ def show_help():
     R = tk.Frame(cols, bg="white")
     R.grid(row=1, column=1, sticky="new", padx=(8, 0))
     _add_card(R, "附带结构",
-              "☑ 附带结构 → 按源路径的结构原样搬运\n"
+              "☑ 附带结构 → 按源路径的结构原样搬运（启动默认开启）\n"
               "要求拖入的东西位于 年\\月\\日期层\\ 之下：\n"
               "  拖入 G:\\库\\2016\\03\\20160301\\a.mp4\n"
               "  落到 分区\\2016\\03\\2016-03-01\\a.mp4\n"
@@ -1700,8 +1638,8 @@ def show_help():
 
     # 底部选项横跨两列，放最底
     _add_card(cols, "底部选项",
-              "第一排：仅复制 / 那年今日 / 附带结构 / 具体到日\n"
-              "第二排：修改·创建时间 / 置顶窗口 / Everything\n"
+              "第一排：仅复制 / 那年今日 / 附带结构 / 具体到日 / 置顶窗口\n"
+              "第二排：修改时间·创建时间 / Everything / ⚙ 设置 / ℹ 使用手册\n"
               "☑ 仅复制 → 复制文件（关闭后为移动文件）\n"
               "☑ 那年今日 → 见上方那年今日说明\n"
               "☑ 附带结构 → 见上方说明（按源路径结构搬运，勾选后两个时间按钮会收起）\n"
@@ -1709,7 +1647,9 @@ def show_help():
               "    关闭则只到 2026/07\n"
               "☑ 置顶窗口 → 窗口始终在最前\n"
               "☑ Everything → 点击格子后在 Everything 中搜索路径\n"
-              "    （点「选择路径」或「自动查找」配置 Everything）").grid(
+              "    （点「选择路径」或「自动查找」配置 Everything）\n"
+              "⚙ 设置 → 启动时是否默认开启「附带结构」\n"
+              "    （取消勾选则记住底栏开关的上次状态）").grid(
                   row=2, column=0, columnspan=2, sticky="ew", pady=(0, 0))
 
     tk.Button(hw, text="知道了", bg="#3b82f6", fg="white",
@@ -2065,10 +2005,18 @@ help_btn = tk.Button(row2, text="ℹ 使用手册", bg=CTRL_BG, fg=TEXT_MAIN,
                      command=show_help)
 help_btn.pack(side="right", padx=(0, 6), ipady=4)
 
-def help_enter(e): help_btn.config(bg="#e8ecf1")
-def help_leave(e): help_btn.config(bg=CTRL_BG)
-help_btn.bind("<Enter>", help_enter)
-help_btn.bind("<Leave>", help_leave)
+# 设置按钮（挂在「使用手册」左边）
+settings_btn = tk.Button(row2, text="⚙ 设置", bg=CTRL_BG, fg=TEXT_MAIN,
+                         font=FONT_CTRL, relief="flat", cursor="hand2", bd=0,
+                         activebackground="#e8ecf1", activeforeground=TEXT_MAIN,
+                         command=open_settings)
+settings_btn.pack(side="right", padx=(0, 6), ipady=4)
+
+def help_enter(e): e.widget.config(bg="#e8ecf1")
+def help_leave(e): e.widget.config(bg=CTRL_BG)
+for _hb in (help_btn, settings_btn):
+    _hb.bind("<Enter>", help_enter)
+    _hb.bind("<Leave>", help_leave)
 
 # 开关按钮的悬停效果
 def _toggle_enter(e): e.widget.config(bg="#e8ecf1")
@@ -2079,7 +2027,7 @@ for _btn in (day_btn, copy_btn, topmost_btn, year_btn, keep_btn, ev_btn):
 
 
 for w in (day_btn, copy_btn, topmost_btn, year_btn, keep_btn,
-          ev_btn, btn_modify, btn_create, help_btn):
+          ev_btn, btn_modify, btn_create, help_btn, settings_btn):
     w.bind("<Button-1>", lambda e: None)
 
 # -- 恢复上次开关状态 --
@@ -2106,7 +2054,9 @@ use_everything = _settings['use_everything']
 if use_everything:
     ev_btn.config(text="☑ Everything")
 ev_path = _settings.get('ev_path', '')
-use_keep_time = _settings.get('use_keep_time', False)
+keep_time_default = _settings.get('keep_time_default', True)
+# 默认开启时每次启动都勾上；关掉这个默认后，改记底栏开关的上次状态
+use_keep_time = True if keep_time_default else _settings.get('use_keep_time', False)
 if use_keep_time:
     keep_btn.config(text="☑ 附带结构")
     _update_time_buttons_visible()

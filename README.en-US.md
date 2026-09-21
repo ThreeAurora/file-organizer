@@ -33,7 +33,7 @@
 |---|---|
 | 🖼 **Nine drag zones** | Nine target zones, each bound to any folder; drop to archive under the current rules, with toast feedback |
 | ⏱ **Time rules** | Created (ctime) / modified (mtime) one-click switch · automatic year / month layers · "down to day" toggle · copy-only mode (originals untouched) |
-| 🗂 **Carry the structure** | Moves things whole, never taken apart: **instant rename on the same drive, and copying across drives does not rewrite creation time**. Checking it tucks away the two time buttons |
+| 🗂 **Carry the structure** | Moves things whole, never taken apart: **instant rename on the same drive, and copying across drives does not rewrite creation time**. Checking it tucks away the two time buttons; on by default, switchable in「⚙ 设置」 |
 | 📅 **That Day in History** | A unique look-back mode: browse old files by year (starts 8 years back), one-click "that day / that month" folders, flip through years freely |
 | 🔎 **Everything integration** | Auto-detects Everything.exe; when enabled, opens / locates results with Everything — whole-disk speed |
 | 🎨 **Zone personalization** | Per-zone color (color picker) with automatic dark text · rename zones · re-pick paths |
@@ -67,7 +67,9 @@ Output: `dist/文件归档器.exe`.
 
 ## 🗂 Carry the structure
 
-The「☑ 附带结构」(Carry the structure) toggle in the bottom bar is the master switch for how things are transported. Off by default.
+The「☑ 附带结构」(Carry the structure) toggle in the bottom bar is the master switch for how things are transported. **On by default.**
+
+To stop it from turning itself on at every launch, open「⚙ 设置」and uncheck「启动时默认开启「附带结构」」— the toggle then goes back to remembering its last state (takes effect on the next launch).
 
 **The problem it solves**: the default path uses `shutil.move`. Same drive is fine, but **across drives it genuinely copies** — and copying resets a file's *creation time* to the current moment. `shutil.copy2` only preserves the modification time, not the creation time. So after moving a batch of old photos you would find their creation dates **all turned into today**.
 
@@ -81,7 +83,7 @@ The「☑ 附带结构」(Carry the structure) toggle in the bottom bar is the m
 
 The same-drive case is worth emphasising: a folder with 3000 files moves in **a few milliseconds**, because not a single byte of content is touched — only ownership of the name changes.
 
-**Checking it tucks away the「修改时间 / 创建时间」buttons** — those two select *which timestamp to sort by*; once this is on, structure is no longer split by time, so leaving them visible would only mislead. Unchecking restores them.
+**Checking it tucks away the「修改时间 / 创建时间」buttons** — those two select *which timestamp to sort by*; once this is on, structure is no longer split by time, so leaving them visible would only mislead. Unchecking restores them. Since it is on by default, those two buttons start tucked away — uncheck 「附带结构」in the bottom bar first if you want to archive by time.
 
 Combined with 「仅复制」(copy only): the resulting copy keeps its creation time too (it is a copy, not a move, so the source stays).
 

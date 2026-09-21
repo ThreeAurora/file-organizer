@@ -102,6 +102,34 @@ check('正式文件是 v2', cur.get('tag') == 'v2')
 check('.bak 保留的是 v1', bak.get('tag') == 'v1')
 
 print('\n' + '='*62)
+print('组 6：load_settings 的「附带结构」启动默认')
+print('='*62)
+ns['DEFAULT_EV_PATH'] = ''
+ns['CONFIG_PATH'] = CFG
+exec(grab('load_settings', src), ns)
+load_settings = ns['load_settings']
+
+# 全新安装：没有配置文件，也要默认开启
+if os.path.exists(CFG):
+    os.remove(CFG)
+s = load_settings()
+check('无配置时 keep_time_default 为真', s.get('keep_time_default') is True,
+      f'got={s.get("keep_time_default")}')
+check('无配置时记录值 use_keep_time 为假', s.get('use_keep_time') is False)
+
+# 升级上来的老配置：settings 里没有这个键
+ns['_atomic_write_json'](CFG, {'settings': {'use_copy': False}})
+s = load_settings()
+check('老配置缺键时仍默认开启', s.get('keep_time_default') is True)
+
+# 用户显式关掉默认开启
+ns['_atomic_write_json'](CFG, {'settings': {'keep_time_default': False,
+                                            'use_keep_time': True}})
+s = load_settings()
+check('显式关掉后读到 False', s.get('keep_time_default') is False)
+check('关掉后 use_keep_time 仍按记录值读出', s.get('use_keep_time') is True)
+
+print('\n' + '='*62)
 print(f'通过 {passed} 项，失败 {failed} 项')
 print('='*62)
 shutil.rmtree(tmpdir, ignore_errors=True)
