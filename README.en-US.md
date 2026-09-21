@@ -49,7 +49,7 @@ Zones start as「请选择路径」(choose a path) — click each zone and pick 
 - Drop files / folders onto a zone → archived by the current rules into `target folder \ year \ month \`, with a result toast
 - Click a zone → open its folder
 - Drop onto the「通用整理」(general staging) area → also archived, but right next to the files themselves
-- Name collisions become `_1`, `_2`, … — existing files are never overwritten; up to 200 items per drop
+- Name collisions become `_1`, `_2`, … — existing files are never overwritten; no cap on items per drop
 
 ### Bottom-bar toggles
 

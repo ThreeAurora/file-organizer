@@ -206,9 +206,6 @@ def copy_preserving_times(src, dst):
 # 结构不符整批拒绝，一个都不动。
 # ============================================================
 
-MAX_ITEMS = 200  # 单次拖入上限，防止把整棵目录树误拖进来
-
-
 def parse_day_folder(day):
     """把日期层文件夹名解析成规范形式。
 
@@ -331,10 +328,6 @@ def _move_structured(item_list, status_var, label, root_window, base_dir):
             continue
         seen.add(key)
 
-        if len(tasks) + len(errors) >= MAX_ITEMS:
-            errors.append(f"超过 {MAX_ITEMS} 项上限，后面的已忽略")
-            break
-
         if not os.path.exists(p):
             errors.append(f"{os.path.basename(p)} → 路径不存在")
             continue
@@ -411,7 +404,7 @@ def _move_mixed(item_list, status_var, label, root_window, base_dir, override_ts
     global is_processing
     tasks = []   # 结构项：(src, year, month, day_folder, name)
     timed = []   # 时间项：src
-    errors = []  # 压根没搬的（路径不存在 / 超过上限）
+    errors = []  # 压根没搬的（路径不存在）
     seen = set()
 
     for p in item_list:
@@ -419,10 +412,6 @@ def _move_mixed(item_list, status_var, label, root_window, base_dir, override_ts
         if key in seen:
             continue
         seen.add(key)
-
-        if len(tasks) + len(timed) + len(errors) >= MAX_ITEMS:
-            errors.append(f"超过 {MAX_ITEMS} 项上限，后面的已忽略")
-            break
 
         if not os.path.exists(p):
             errors.append(f"{os.path.basename(p)} → 路径不存在")
